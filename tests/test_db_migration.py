@@ -1,12 +1,14 @@
-"""Regression test for the term_signals column migrations in app/db.py.
+"""Regression test for the schema migrations in app/db.py.
 
-The schema has changed twice (adding `sources`, then
-`top_advertisers_json`) since the first release, and `CREATE TABLE IF NOT
-EXISTS` alone does nothing for a database that already exists on disk
-from before those changes — every insert into a missing column would
-break. This simulates exactly that: a pre-existing DB with the original
-schema, then verifies init_db() adds the missing columns (backfilling
-`sources` from the old single `source` column) without losing data.
+The schema has changed several times since the first release (adding
+`sources` and `top_advertisers_json` to term_signals, then a whole new
+`batches` table plus `search_runs.batch_id` for batch scans), and `CREATE
+TABLE IF NOT EXISTS` alone does nothing for a database that already
+exists on disk from before those changes — every insert into a missing
+column would break. This simulates exactly that: a pre-existing DB with
+the original schema, then verifies init_db() adds the missing columns
+(backfilling `sources` from the old single `source` column) without
+losing data.
 """
 import sqlite3
 
@@ -61,6 +63,14 @@ def test_init_db_migrates_old_schema_without_losing_data(monkeypatch, tmp_path):
     assert row["sources"] == "google_trends"  # backfilled from the old `source` column
     assert row["top_advertisers_json"] == "[]"
     assert row["term"] == "cocina"  # original data preserved
+
+    # The old DB also predates batch scans entirely — no `batches` table,
+    # no `batch_id` column on search_runs. Both should now exist, and the
+    # pre-existing run should have a NULL batch_id (it was never batched).
+    run = db.get_search_run(1)
+    assert "batch_id" in run.keys()
+    assert run["batch_id"] is None
+    assert db.get_recent_batches() == []  # batches table exists but is empty
 
 
 def test_init_db_is_idempotent_on_already_migrated_db(monkeypatch, tmp_path):

@@ -17,6 +17,17 @@ To live with that:
     32s). If a batch still fails after that, it's skipped rather than
     crashing the whole search — you get a partial result instead of
     nothing.
+
+Related-terms noise: "related queries" for a broad niche word isn't
+product-aware — it returns whatever else people search alongside that
+word, which for something like "mascotas" (pets) can pull in unrelated
+current events (e.g. World Cup mascots) that happen to share the word.
+GOOGLE_TRENDS_CATEGORY restricts every request to a Google category (18 =
+Shopping by default) to bias results toward commercial/shopping intent
+and cut most of that noise. It's a real improvement, not a full fix: for
+a generic niche you'll still get topic-level related terms (types of
+products, not one specific product) — that's inherent to how broad the
+seed word is, not something a category filter alone can solve.
 """
 from __future__ import annotations
 
@@ -76,7 +87,10 @@ class GoogleTrendsSource(SignalSource):
         return self._pytrends
 
     def _related_terms(self, niche: str, max_terms: int) -> list[str]:
-        cache_key = f"related:{niche}:{settings.google_trends_geo}:{settings.google_trends_hl}"
+        cache_key = (
+            f"related:{niche}:{settings.google_trends_geo}:"
+            f"{settings.google_trends_hl}:cat{settings.google_trends_category}"
+        )
         cached = cache.get(cache_key, settings.google_trends_cache_ttl_hours)
         if cached is not None:
             return cached[:max_terms]
@@ -84,7 +98,10 @@ class GoogleTrendsSource(SignalSource):
         def _fetch():
             client = self._client()
             client.build_payload(
-                [niche], timeframe=TIMEFRAME, geo=settings.google_trends_geo
+                [niche],
+                timeframe=TIMEFRAME,
+                geo=settings.google_trends_geo,
+                cat=settings.google_trends_category,
             )
             return client.related_queries()
 
@@ -109,7 +126,10 @@ class GoogleTrendsSource(SignalSource):
         return ordered[:max_terms]
 
     def _interest_over_time_batch(self, terms: list[str]) -> dict[str, list[dict]]:
-        cache_key = f"iot:{','.join(sorted(terms))}:{settings.google_trends_geo}:{settings.google_trends_hl}"
+        cache_key = (
+            f"iot:{','.join(sorted(terms))}:{settings.google_trends_geo}:"
+            f"{settings.google_trends_hl}:cat{settings.google_trends_category}"
+        )
         cached = cache.get(cache_key, settings.google_trends_cache_ttl_hours)
         if cached is not None:
             return cached
@@ -117,7 +137,10 @@ class GoogleTrendsSource(SignalSource):
         def _fetch():
             client = self._client()
             client.build_payload(
-                terms, timeframe=TIMEFRAME, geo=settings.google_trends_geo
+                terms,
+                timeframe=TIMEFRAME,
+                geo=settings.google_trends_geo,
+                cat=settings.google_trends_category,
             )
             return client.interest_over_time()
 

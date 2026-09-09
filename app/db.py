@@ -10,11 +10,23 @@ from typing import Iterator
 
 from app.config import settings
 
-SCHEMA = """
+# Tables and indexes are split into separate scripts (see init_db) because
+# an index on a column added by a later migration (e.g. batch_id) can't be
+# created until that column actually exists — CREATE TABLE IF NOT EXISTS
+# is a no-op on an already-existing table, so on an old database the
+# ALTER TABLE migrations below must run before any index referencing their
+# columns does.
+TABLES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS search_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     niche TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    batch_id INTEGER REFERENCES batches(id)
 );
 
 CREATE TABLE IF NOT EXISTS term_signals (
@@ -33,8 +45,11 @@ CREATE TABLE IF NOT EXISTS term_signals (
     series_json TEXT NOT NULL,
     top_advertisers_json TEXT NOT NULL DEFAULT '[]'
 );
+"""
 
+INDEXES_SCHEMA = """
 CREATE INDEX IF NOT EXISTS idx_search_runs_niche ON search_runs(niche);
+CREATE INDEX IF NOT EXISTS idx_search_runs_batch ON search_runs(batch_id);
 CREATE INDEX IF NOT EXISTS idx_term_signals_run ON term_signals(search_run_id);
 CREATE INDEX IF NOT EXISTS idx_term_signals_term ON term_signals(term);
 """
@@ -70,10 +85,24 @@ def _migrate_term_signals(conn: sqlite3.Connection) -> None:
             conn.execute("UPDATE term_signals SET sources = source WHERE sources = ''")
 
 
+_SEARCH_RUNS_MIGRATIONS = {
+    "batch_id": "ALTER TABLE search_runs ADD COLUMN batch_id INTEGER REFERENCES batches(id)",
+}
+
+
+def _migrate_search_runs(conn: sqlite3.Connection) -> None:
+    existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(search_runs)")}
+    for column, statement in _SEARCH_RUNS_MIGRATIONS.items():
+        if column not in existing_columns:
+            conn.execute(statement)
+
+
 def init_db() -> None:
     with _connect() as conn:
-        conn.executescript(SCHEMA)
+        conn.executescript(TABLES_SCHEMA)
+        _migrate_search_runs(conn)
         _migrate_term_signals(conn)
+        conn.executescript(INDEXES_SCHEMA)
 
 
 @contextmanager
@@ -86,11 +115,20 @@ def get_conn() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
-def create_search_run(niche: str) -> int:
+def create_batch() -> int:
     with get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO search_runs (niche, created_at) VALUES (?, ?)",
-            (niche, datetime.now(timezone.utc).isoformat()),
+            "INSERT INTO batches (created_at) VALUES (?)",
+            (datetime.now(timezone.utc).isoformat(),),
+        )
+        return cur.lastrowid
+
+
+def create_search_run(niche: str, batch_id: int | None = None) -> int:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO search_runs (niche, created_at, batch_id) VALUES (?, ?, ?)",
+            (niche, datetime.now(timezone.utc).isoformat(), batch_id),
         )
         return cur.lastrowid
 
@@ -164,4 +202,23 @@ def get_recent_runs(limit: int = 20) -> list[sqlite3.Row]:
     with get_conn() as conn:
         return conn.execute(
             "SELECT * FROM search_runs ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+
+
+def get_batch(batch_id: int) -> sqlite3.Row | None:
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM batches WHERE id = ?", (batch_id,)).fetchone()
+
+
+def get_runs_for_batch(batch_id: int) -> list[sqlite3.Row]:
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM search_runs WHERE batch_id = ? ORDER BY id", (batch_id,)
+        ).fetchall()
+
+
+def get_recent_batches(limit: int = 15) -> list[sqlite3.Row]:
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM batches ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()

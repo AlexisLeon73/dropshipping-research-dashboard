@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Form, Request
@@ -11,7 +12,7 @@ from fastapi.templating import Jinja2Templates
 
 from app import db
 from app.config import settings
-from app.export import term_signals_to_csv
+from app.export import batch_term_signals_to_csv, term_signals_to_csv
 from app.scoring import combine_source_scores
 from app.sources import amazon
 from app.sources.base import SignalSource
@@ -151,8 +152,15 @@ def run_search(niche: str, max_terms: int) -> list[dict]:
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     recent_runs = db.get_recent_runs(limit=15)
+    recent_batches = db.get_recent_batches(limit=10)
     return templates.TemplateResponse(
-        request, "index.html", {"recent_runs": recent_runs}
+        request,
+        "index.html",
+        {
+            "recent_runs": recent_runs,
+            "recent_batches": recent_batches,
+            "max_niches_per_batch": settings.max_niches_per_batch,
+        },
     )
 
 
@@ -224,4 +232,96 @@ def export_csv(run_id: int):
         headers={
             "Content-Disposition": f'attachment; filename="{run["niche"]}_{run_id}.csv"'
         },
+    )
+
+
+def _parse_batch_niches(raw: str) -> list[str]:
+    """Split on commas or newlines, strip, dedupe (case-insensitive, first
+    occurrence wins), and cap at settings.max_niches_per_batch.
+    """
+    candidates = [n.strip() for n in re.split(r"[,\n]", raw) if n.strip()]
+    seen: set[str] = set()
+    deduped = []
+    for n in candidates:
+        if n.lower() not in seen:
+            seen.add(n.lower())
+            deduped.append(n)
+    return deduped[: settings.max_niches_per_batch]
+
+
+def _load_batch_rows(batch_id: int) -> tuple[list[dict], list[dict]]:
+    """Returns (combined_rows, runs_info) for a batch: every term_signal
+    across every niche in the batch, each tagged with its niche and the
+    run it came from, sorted by score — the whole point of a batch scan
+    being one ranked list across niches instead of niche-by-niche.
+    """
+    runs = db.get_runs_for_batch(batch_id)
+    combined_rows: list[dict] = []
+    for run in runs:
+        for row in db.get_term_signals(run["id"]):
+            row_dict = dict(row)
+            row_dict["top_advertisers"] = json.loads(row_dict.pop("top_advertisers_json") or "[]")
+            row_dict["series"] = json.loads(row_dict.pop("series_json") or "[]")
+            row_dict["niche"] = run["niche"]
+            row_dict["run_id"] = run["id"]
+            combined_rows.append(row_dict)
+
+    combined_rows.sort(key=lambda r: r["score"], reverse=True)
+    runs_info = [{"id": r["id"], "niche": r["niche"]} for r in runs]
+    return combined_rows, runs_info
+
+
+@app.post("/batch-search")
+def batch_search(niches: str = Form(...)):
+    niche_list = _parse_batch_niches(niches)
+    if not niche_list:
+        return RedirectResponse(url="/", status_code=303)
+
+    batch_id = db.create_batch()
+    for niche in niche_list:
+        run_id = db.create_search_run(niche, batch_id=batch_id)
+        signals = run_search(niche, settings.max_terms_per_search)
+        for signal in signals:
+            db.save_term_signal(run_id, signal)
+
+    return RedirectResponse(url=f"/batch/{batch_id}", status_code=303)
+
+
+@app.get("/batch/{batch_id}", response_class=HTMLResponse)
+def batch_results(request: Request, batch_id: int):
+    batch = db.get_batch(batch_id)
+    if batch is None:
+        return HTMLResponse("Batch not found", status_code=404)
+
+    combined_rows, runs_info = _load_batch_rows(batch_id)
+    # Cap the chart at the top 15 rows — a full batch's worth of lines
+    # (niches × terms each) would be unreadable on one chart.
+    chart_series = {
+        f"{row['niche']}: {row['term']}": row["series"] for row in combined_rows[:15]
+    }
+
+    return templates.TemplateResponse(
+        request,
+        "batch_results.html",
+        {
+            "batch": batch,
+            "runs": runs_info,
+            "rows": combined_rows,
+            "chart_series_json": json.dumps(chart_series),
+            "amazon_movers_and_shakers_url": amazon.manual_link(),
+        },
+    )
+
+
+@app.get("/batch/{batch_id}/export.csv")
+def export_batch_csv(batch_id: int):
+    batch = db.get_batch(batch_id)
+    if batch is None:
+        return PlainTextResponse("Batch not found", status_code=404)
+    combined_rows, _ = _load_batch_rows(batch_id)
+    csv_text = batch_term_signals_to_csv(combined_rows)
+    return PlainTextResponse(
+        csv_text,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="batch_{batch_id}.csv"'},
     )
