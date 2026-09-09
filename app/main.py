@@ -15,12 +15,19 @@ from app.export import term_signals_to_csv
 from app.scoring import combine_source_scores
 from app.sources.base import SignalSource
 from app.sources.google_trends import GoogleTrendsSource
+from app.sources.reddit import RedditSource
 
 logging.basicConfig(level=logging.INFO)
 
-# Only Google Trends is wired up today. Reddit / Meta Ads / TikTok slot in
-# here once implemented — nothing else in this file needs to change.
-ACTIVE_SOURCES: list[SignalSource] = [GoogleTrendsSource()]
+# Meta Ads / TikTok slot in here once implemented — nothing else in this
+# file needs to change. Order matters for PRIMARY_SOURCE_PRIORITY below.
+ACTIVE_SOURCES: list[SignalSource] = [GoogleTrendsSource(), RedditSource()]
+
+# When more than one source reports the same term, its display fields
+# (series/growth/momentum/ad link) come from whichever configured source
+# ranks highest here — the score itself still blends every source that
+# reported the term, via combine_source_scores.
+PRIMARY_SOURCE_PRIORITY = ["google_trends", "reddit", "meta_ads", "tiktok"]
 
 
 @asynccontextmanager
@@ -36,15 +43,22 @@ templates = Jinja2Templates(directory="app/templates")
 
 def run_search(niche: str, max_terms: int) -> list[dict]:
     """Fetch signals from every configured+implemented source and combine
-    them into one score per term. Today there's only one source, so this
-    is mostly a pass-through — the merge point is here so wiring up a
-    second source later doesn't touch the routes below.
+    them into one score per term.
+
+    Different sources can report the same term (e.g. Google Trends and
+    Reddit both report the bare niche term). When that happens, every
+    source's score for that term feeds combine_source_scores() — nothing
+    is silently dropped just because two sources agree on a term. Display
+    fields that only make sense from one source (the 90-day series,
+    growth/momentum, the ad-inspection link) come from whichever
+    configured source ranks highest in PRIMARY_SOURCE_PRIORITY.
     """
-    signals_by_term: dict[str, dict] = {}
+    per_term_scores: dict[str, dict[str, float]] = {}
+    per_term_signals: dict[str, dict[str, dict]] = {}
+
     for source in ACTIVE_SOURCES:
         if not source.is_configured():
-            logger_msg = f"{source.name} not configured, skipping"
-            logging.info(logger_msg)
+            logging.info("%s not configured, skipping", source.name)
             continue
         try:
             results = source.fetch_signals(niche, max_terms)
@@ -56,11 +70,18 @@ def run_search(niche: str, max_terms: int) -> list[dict]:
             )
             continue
         for signal in results:
-            signals_by_term.setdefault(signal.term, signal.as_dict())
+            per_term_scores.setdefault(signal.term, {})[signal.source] = signal.score
+            per_term_signals.setdefault(signal.term, {})[signal.source] = signal.as_dict()
 
     final_signals = []
-    for term, data in signals_by_term.items():
-        data["score"] = combine_source_scores({data["source"]: data["score"]})
+    for term, sources_data in per_term_signals.items():
+        primary_source = next(
+            (s for s in PRIMARY_SOURCE_PRIORITY if s in sources_data),
+            next(iter(sources_data)),
+        )
+        data = dict(sources_data[primary_source])
+        data["score"] = combine_source_scores(per_term_scores[term])
+        data["sources"] = sorted(sources_data.keys())
         final_signals.append(data)
 
     final_signals.sort(key=lambda s: s["score"], reverse=True)

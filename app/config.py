@@ -33,6 +33,7 @@ class Settings:
     reddit_user_agent: str = os.getenv(
         "REDDIT_USER_AGENT", "product-research-dashboard/0.1"
     )
+    reddit_cache_ttl_hours: float = float(os.getenv("REDDIT_CACHE_TTL_HOURS", "6"))
 
     # Meta Ads Library (future)
     meta_access_token: str = os.getenv("META_ACCESS_TOKEN", "")

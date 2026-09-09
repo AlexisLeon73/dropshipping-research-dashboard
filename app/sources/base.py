@@ -7,8 +7,23 @@ main.py. Nothing else in the app needs to change.
 """
 from __future__ import annotations
 
+import urllib.parse
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+
+
+def ads_library_url(term: str) -> str:
+    """Meta Ads Library search URL for manually inspecting active ads for a
+    term. Shared by every source, since "go look at the actual ads" is the
+    same follow-up regardless of which source flagged the term.
+    """
+    query = urllib.parse.urlencode({
+        "active_status": "active",
+        "ad_type": "all",
+        "country": "ALL",
+        "q": term,
+    })
+    return f"https://www.facebook.com/ads/library/?{query}"
 
 
 @dataclass

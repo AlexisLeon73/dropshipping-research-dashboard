@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS term_signals (
     search_run_id INTEGER NOT NULL REFERENCES search_runs(id),
     term TEXT NOT NULL,
     source TEXT NOT NULL,
+    sources TEXT NOT NULL,
     score REAL NOT NULL,
     growth_pct REAL,
     momentum_pct REAL,
@@ -75,15 +76,16 @@ def save_term_signal(search_run_id: int, signal: dict) -> None:
         conn.execute(
             """
             INSERT INTO term_signals (
-                search_run_id, term, source, score, growth_pct,
+                search_run_id, term, source, sources, score, growth_pct,
                 momentum_pct, avg_interest, competition_estimate,
                 competition_label, ad_library_url, series_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 search_run_id,
                 signal["term"],
                 signal["source"],
+                ",".join(signal.get("sources", [signal["source"]])),
                 signal["score"],
                 signal.get("growth_pct"),
                 signal.get("momentum_pct"),

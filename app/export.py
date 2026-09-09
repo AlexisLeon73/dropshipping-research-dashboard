@@ -10,7 +10,7 @@ def term_signals_to_csv(niche: str, rows: list[sqlite3.Row]) -> str:
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow([
-        "niche", "term", "source", "score", "growth_pct", "momentum_pct",
+        "niche", "term", "sources", "score", "growth_pct", "momentum_pct",
         "avg_interest", "competition_estimate", "competition_label",
         "ad_library_url",
     ])
@@ -18,7 +18,7 @@ def term_signals_to_csv(niche: str, rows: list[sqlite3.Row]) -> str:
         writer.writerow([
             niche,
             row["term"],
-            row["source"],
+            row["sources"],
             row["score"],
             row["growth_pct"],
             row["momentum_pct"],

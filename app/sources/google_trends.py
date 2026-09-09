@@ -22,14 +22,13 @@ from __future__ import annotations
 
 import logging
 import time
-import urllib.parse
 
 from pytrends.request import TrendReq
 
 from app import cache
 from app.config import settings
 from app.scoring import score_google_trends_series
-from app.sources.base import SignalSource, TermSignal
+from app.sources.base import SignalSource, TermSignal, ads_library_url
 
 logger = logging.getLogger(__name__)
 
@@ -37,16 +36,6 @@ TIMEFRAME = "today 3-m"  # ~90 days
 MAX_RETRIES = 5
 INITIAL_BACKOFF_SECONDS = 2
 BATCH_SIZE = 5  # Google Trends allows up to 5 keywords per request
-
-
-def _ads_library_url(term: str) -> str:
-    query = urllib.parse.urlencode({
-        "active_status": "active",
-        "ad_type": "all",
-        "country": "ALL",
-        "q": term,
-    })
-    return f"https://www.facebook.com/ads/library/?{query}"
 
 
 def _with_retry(fn, *args, **kwargs):
@@ -172,7 +161,7 @@ class GoogleTrendsSource(SignalSource):
                         avg_interest=scored["avg_interest"],
                         competition_estimate=None,
                         competition_label="Requires Meta Ads Library (not wired up yet)",
-                        ad_library_url=_ads_library_url(term),
+                        ad_library_url=ads_library_url(term),
                         series=series,
                     )
                 )

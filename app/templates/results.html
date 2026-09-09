@@ -46,6 +46,7 @@
                 <th></th>
                 <th>Term</th>
                 <th>Score</th>
+                <th>Sources</th>
                 <th>Δ vs last run</th>
                 <th>Growth %</th>
                 <th>Momentum %</th>
@@ -60,6 +61,7 @@
                 <td><input type="checkbox" class="term-toggle" data-term="{{ row['term'] }}" checked></td>
                 <td>{{ row['term'] }}</td>
                 <td><strong>{{ "%.1f"|format(row['score']) }}</strong></td>
+                <td class="muted">{{ row['sources'].replace(',', ' + ') }}</td>
                 <td>
                     {% if row['score_delta'] is not none %}
                         {% if row['score_delta'] > 0 %}<span class="up">+{{ row['score_delta'] }}</span>

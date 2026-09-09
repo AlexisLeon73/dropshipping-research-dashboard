@@ -1,9 +1,10 @@
 """Full pipeline test through the real FastAPI app (routing, templates,
-SQLite storage, scoring, CSV export, week-over-week deltas).
+SQLite storage, scoring, CSV export, week-over-week deltas, multi-source
+merging).
 
-The only thing mocked is the network call to Google Trends itself — this
-sandbox has no general internet egress, so GoogleTrendsSource.fetch_signals
-is swapped for a fake that returns realistic-shaped series data and runs
+The only thing mocked is the network call each source makes — this
+sandbox has no general internet egress, so each source's fetch_signals is
+swapped for a fake that returns realistic-shaped series data and runs
 through the *real* scoring function. Everything downstream of that call is
 exercised for real.
 """
@@ -11,8 +12,8 @@ import datetime
 
 from fastapi.testclient import TestClient
 
-from app.main import ACTIVE_SOURCES, app
-from app.scoring import score_google_trends_series
+from app.main import ACTIVE_SOURCES, app, run_search
+from app.scoring import combine_source_scores, score_google_trends_series
 from app.sources.base import TermSignal
 
 
@@ -91,3 +92,63 @@ def test_index_renders():
         resp = client.get("/")
         assert resp.status_code == 200
         assert "Research a niche" in resp.text
+
+
+def test_multi_source_merge_combines_scores_instead_of_dropping_one(monkeypatch):
+    """Google Trends and Reddit both report a signal for the bare niche
+    term ("cocina"). Before the merge fix, run_search kept only the first
+    source's data for a colliding term and silently dropped the rest —
+    this pins the correct behavior: every source's score for a term feeds
+    combine_source_scores, and the term's `sources` field lists both.
+    """
+    trends_signal = _make_signal("cocina", list(range(5, 95)))  # source="google_trends"
+    reddit_signal = TermSignal(
+        term="cocina",
+        source="reddit",
+        score=90.0,
+        growth_pct=50.0,
+        momentum_pct=50.0,
+        avg_interest=80.0,
+        ad_library_url="https://www.facebook.com/ads/library/?q=cocina",
+        series=_series([10] * 90),
+    )
+
+    monkeypatch.setattr(ACTIVE_SOURCES[0], "fetch_signals", lambda niche, max_terms: [trends_signal])
+    monkeypatch.setattr(ACTIVE_SOURCES[1], "fetch_signals", lambda niche, max_terms: [reddit_signal])
+    monkeypatch.setattr(ACTIVE_SOURCES[1], "is_configured", lambda: True)
+
+    signals = run_search("cocina", max_terms=10)
+
+    assert len(signals) == 1  # merged into one row, not two
+    merged = signals[0]
+    assert merged["sources"] == ["google_trends", "reddit"]
+    expected_score = combine_source_scores(
+        {"google_trends": trends_signal.score, "reddit": 90.0}
+    )
+    assert merged["score"] == expected_score
+    # Google Trends outranks Reddit in PRIMARY_SOURCE_PRIORITY, so display
+    # fields (series/growth/momentum) come from the Trends signal.
+    assert merged["growth_pct"] == trends_signal.growth_pct
+
+
+def test_multi_source_merge_end_to_end_via_http(monkeypatch):
+    trends_signal = _make_signal("mascotas", list(range(5, 95)))
+    reddit_signal = TermSignal(
+        term="mascotas",
+        source="reddit",
+        score=90.0,
+        growth_pct=50.0,
+        momentum_pct=50.0,
+        avg_interest=80.0,
+        ad_library_url="https://www.facebook.com/ads/library/?q=mascotas",
+        series=_series([10] * 90),
+    )
+    monkeypatch.setattr(ACTIVE_SOURCES[0], "fetch_signals", lambda niche, max_terms: [trends_signal])
+    monkeypatch.setattr(ACTIVE_SOURCES[1], "fetch_signals", lambda niche, max_terms: [reddit_signal])
+    monkeypatch.setattr(ACTIVE_SOURCES[1], "is_configured", lambda: True)
+
+    with TestClient(app) as client:
+        resp = client.post("/search", data={"niche": "mascotas"}, follow_redirects=False)
+        results_page = client.get(resp.headers["location"])
+        assert results_page.status_code == 200
+        assert "google_trends + reddit" in results_page.text
