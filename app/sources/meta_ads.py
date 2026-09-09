@@ -1,0 +1,187 @@
+"""Meta Ads Library source: the official Ad Library API
+(graph.facebook.com/.../ads_archive) — not a scrape of the public ad
+library website. Needs an access token from an app at
+https://developers.facebook.com with Ad Library API access
+(META_ACCESS_TOKEN in .env).
+
+Rate limit: ~200 calls/hour per Meta's documented limits. Handled with the
+same disk-cache + exponential-backoff pattern as the other sources (cache
+TTL: META_CACHE_TTL_HOURS, default 6h).
+
+Signal: search ads_archive for the niche term with ad_active_status=ACTIVE,
+bucket the matching ads' ad_delivery_start_time into a 90-day daily count
+(more ads *starting* to run for a term recently is a stronger "this
+converts" signal than a flat, old count), and score it with the same
+growth/momentum formula as the other sources. The raw active-ad count also
+becomes `competition_estimate`, and the ads are grouped by `page_name`
+into `top_advertisers` (page name, how many active ads, and a direct link
+to one of their ads via `ad_snapshot_url`) — this is the whole point of
+this source for dropshipping research: not just "N ads exist" but "here's
+who's actually running them, go look." This is the one source that fills
+in competition_estimate/top_advertisers; see the override in
+`app.main.run_search` that keeps a term's Meta Ads data even when another
+source wins the "primary display" slot for that term.
+
+ads_archive has no "related terms" endpoint — given one term, this module
+only ever knows how to search for ads matching that exact term. That's
+why `per_term = True`: `app.main.run_search` calls fetch_signals once per
+term Google Trends discovered (falling back to just the bare niche if
+Trends found nothing), so this still ends up covering every candidate
+term — it's just not this module's job to discover them. With ~10 terms
+per search that's up to ~50 requests (5 pages/term), comfortably under
+the 200/hour limit for a single search.
+"""
+from __future__ import annotations
+
+import logging
+import time
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+
+import requests
+
+from app import cache
+from app.config import settings
+from app.scoring import score_google_trends_series
+from app.sources.base import SignalSource, TermSignal, ads_library_url
+
+logger = logging.getLogger(__name__)
+
+GRAPH_API_VERSION = "v21.0"
+ADS_ARCHIVE_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}/ads_archive"
+WINDOW_DAYS = 90
+MAX_RETRIES = 4
+INITIAL_BACKOFF_SECONDS = 2
+MAX_PAGES = 5  # up to 5 * 100 = 500 ads considered per search
+TOP_ADVERTISERS_LIMIT = 5
+
+
+def _with_retry(fn, *args, **kwargs):
+    delay = INITIAL_BACKOFF_SECONDS
+    last_error = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            last_error = exc
+            is_last = attempt == MAX_RETRIES
+            logger.warning(
+                "Meta Ad Library call failed (attempt %s/%s): %s%s",
+                attempt, MAX_RETRIES, exc, "" if is_last else f" — retrying in {delay}s",
+            )
+            if is_last:
+                break
+            time.sleep(delay)
+            delay *= 2
+    raise last_error
+
+
+class MetaAdsSource(SignalSource):
+    name = "meta_ads"
+    per_term = True
+
+    def is_configured(self) -> bool:
+        return bool(settings.meta_access_token)
+
+    def _search_ads(self, term: str) -> list[dict]:
+        cache_key = f"meta_ads_search:{term}:{settings.meta_ad_reached_countries}"
+        cached = cache.get(cache_key, settings.meta_cache_ttl_hours)
+        if cached is not None:
+            return cached
+
+        ads: list[dict] = []
+        url = ADS_ARCHIVE_URL
+        params = {
+            "access_token": settings.meta_access_token,
+            "search_terms": term,
+            "ad_active_status": "ACTIVE",
+            "ad_reached_countries": settings.meta_ad_reached_countries,
+            "fields": "id,page_name,ad_delivery_start_time,ad_snapshot_url",
+            "limit": 100,
+        }
+
+        for page in range(MAX_PAGES):
+            def _fetch(url=url, params=params):
+                resp = requests.get(url, params=params, timeout=15)
+                resp.raise_for_status()
+                return resp.json()
+
+            data = _with_retry(_fetch)
+            batch = data.get("data", [])
+            if not batch:
+                break
+            ads.extend(batch)
+
+            next_url = data.get("paging", {}).get("next")
+            if not next_url:
+                break
+            # The "next" URL already carries every query param encoded.
+            url, params = next_url, None
+            if page < MAX_PAGES - 1:
+                time.sleep(1)
+
+        cache.set(cache_key, ads)
+        return ads
+
+    def _daily_series(self, ads: list[dict]) -> list[dict]:
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=WINDOW_DAYS)
+        counts: dict[str, int] = defaultdict(int)
+        for ad in ads:
+            raw_start = ad.get("ad_delivery_start_time")
+            if not raw_start:
+                continue
+            started = datetime.fromisoformat(raw_start.replace("Z", "+00:00"))
+            if started < start:
+                continue
+            counts[started.date().isoformat()] += 1
+
+        max_count = max(counts.values(), default=0)
+        series = []
+        for i in range(WINDOW_DAYS):
+            day = (start + timedelta(days=i)).date().isoformat()
+            raw = counts.get(day, 0)
+            value = (raw / max_count * 100) if max_count else 0.0
+            series.append({"date": day, "value": round(value, 1)})
+        return series
+
+    def _top_advertisers(self, ads: list[dict], limit: int = TOP_ADVERTISERS_LIMIT) -> list[dict]:
+        by_page: dict[str, dict] = {}
+        for ad in ads:
+            page_name = ad.get("page_name")
+            if not page_name:
+                continue
+            entry = by_page.setdefault(
+                page_name, {"page_name": page_name, "ad_count": 0, "sample_ad_url": None}
+            )
+            entry["ad_count"] += 1
+            if entry["sample_ad_url"] is None and ad.get("ad_snapshot_url"):
+                entry["sample_ad_url"] = ad["ad_snapshot_url"]
+
+        ranked = sorted(by_page.values(), key=lambda e: e["ad_count"], reverse=True)
+        return ranked[:limit]
+
+    def fetch_signals(self, niche: str, max_terms: int) -> list[TermSignal]:
+        ads = self._search_ads(niche)
+        series = self._daily_series(ads)
+        values = [point["value"] for point in series]
+        scored = score_google_trends_series(values)
+
+        active_count = len(ads)
+        count_label = f"{active_count}+" if active_count >= MAX_PAGES * 100 else str(active_count)
+
+        return [
+            TermSignal(
+                term=niche,
+                source=self.name,
+                score=scored["score"],
+                growth_pct=scored["growth_pct"],
+                momentum_pct=scored["momentum_pct"],
+                avg_interest=scored["avg_interest"],
+                competition_estimate=active_count,
+                competition_label=f"{count_label} active ads matching this term (Meta Ad Library)",
+                ad_library_url=ads_library_url(niche),
+                series=series,
+                top_advertisers=self._top_advertisers(ads),
+            )
+        ]
