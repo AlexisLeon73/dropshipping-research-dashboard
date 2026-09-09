@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="search-card">
+    <h1>Research a niche</h1>
+    <p class="muted">
+        Enter a category or niche (e.g. "cocina", "mascotas", "fitness").
+        The dashboard pulls related search terms and their 90-day Google
+        Trends interest, and scores them by growth and recent momentum.
+    </p>
+    <form action="/search" method="post" class="search-form">
+        <input type="text" name="niche" placeholder="e.g. cocina" required autofocus>
+        <button type="submit">Search</button>
+    </form>
+</section>
+
+<section>
+    <h2>Recent searches</h2>
+    {% if recent_runs %}
+    <table class="runs-table">
+        <thead>
+            <tr><th>Niche</th><th>Date</th><th></th></tr>
+        </thead>
+        <tbody>
+        {% for run in recent_runs %}
+            <tr>
+                <td>{{ run["niche"] }}</td>
+                <td>{{ run["created_at"] }}</td>
+                <td><a href="/results/{{ run['id'] }}">View results</a></td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No searches yet.</p>
+    {% endif %}
+</section>
+{% endblock %}

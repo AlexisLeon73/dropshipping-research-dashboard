@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="results-header">
+    <h1>Results for "{{ run['niche'] }}"</h1>
+    <p class="muted">Run #{{ run['id'] }} — {{ run['created_at'] }}</p>
+    <div class="actions">
+        <a href="/export/{{ run['id'] }}.csv" class="button">Export CSV</a>
+        <a href="/" class="button secondary">New search</a>
+    </div>
+    {% if previous_run %}
+    <p class="muted">Compared against previous run #{{ previous_run['id'] }} ({{ previous_run['created_at'] }}) for the same niche.</p>
+    {% else %}
+    <p class="muted">No previous run for this niche yet — run this search again next week to see score deltas.</p>
+    {% endif %}
+    {% if other_runs %}
+    <details>
+        <summary>Other runs for "{{ run['niche'] }}" ({{ other_runs|length }})</summary>
+        <ul>
+        {% for r in other_runs %}
+            <li><a href="/results/{{ r['id'] }}">#{{ r['id'] }} — {{ r['created_at'] }}</a></li>
+        {% endfor %}
+        </ul>
+    </details>
+    {% endif %}
+</section>
+
+{% if not rows %}
+<section class="search-card">
+    <p><strong>No signals came back for this search.</strong></p>
+    <p class="muted">
+        Google Trends is unofficial and rate-limits hard — this usually
+        means it returned an error (HTTP 429) or timed out. Wait a few
+        minutes and try again; results already cached locally will still
+        load instantly.
+    </p>
+</section>
+{% else %}
+<section class="chart-section">
+    <canvas id="trendChart" height="90"></canvas>
+</section>
+
+<section>
+    <table class="results-table">
+        <thead>
+            <tr>
+                <th></th>
+                <th>Term</th>
+                <th>Score</th>
+                <th>Δ vs last run</th>
+                <th>Growth %</th>
+                <th>Momentum %</th>
+                <th>Avg interest</th>
+                <th>Competition</th>
+                <th>Ads Library</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for row in rows %}
+            <tr>
+                <td><input type="checkbox" class="term-toggle" data-term="{{ row['term'] }}" checked></td>
+                <td>{{ row['term'] }}</td>
+                <td><strong>{{ "%.1f"|format(row['score']) }}</strong></td>
+                <td>
+                    {% if row['score_delta'] is not none %}
+                        {% if row['score_delta'] > 0 %}<span class="up">+{{ row['score_delta'] }}</span>
+                        {% elif row['score_delta'] < 0 %}<span class="down">{{ row['score_delta'] }}</span>
+                        {% else %}<span class="flat">0.0</span>{% endif %}
+                    {% else %}<span class="muted">—</span>{% endif %}
+                </td>
+                <td>{{ row['growth_pct'] }}%</td>
+                <td>{{ row['momentum_pct'] }}%</td>
+                <td>{{ row['avg_interest'] }}</td>
+                <td class="muted" title="{{ row['competition_label'] }}">
+                    {{ row['competition_estimate'] if row['competition_estimate'] is not none else 'N/A' }}
+                </td>
+                <td><a href="{{ row['ad_library_url'] }}" target="_blank" rel="noopener">inspect ads ↗</a></td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script>
+const seriesData = {{ chart_series_json | safe }};
+const palette = ["#2563eb","#dc2626","#16a34a","#ca8a04","#7c3aed","#0891b2","#db2777","#65a30d","#ea580c","#4f46e5"];
+
+function buildDatasets() {
+    const terms = Object.keys(seriesData);
+    return terms.map((term, i) => ({
+        label: term,
+        data: seriesData[term].map(p => ({x: p.date, y: p.value})),
+        borderColor: palette[i % palette.length],
+        backgroundColor: "transparent",
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.25,
+        hidden: false,
+        _term: term,
+    }));
+}
+
+const ctx = document.getElementById("trendChart");
+const chart = new Chart(ctx, {
+    type: "line",
+    data: { datasets: buildDatasets() },
+    options: {
+        responsive: true,
+        interaction: { mode: "nearest", intersect: false },
+        scales: {
+            x: { type: "time", time: { unit: "week" }, title: { display: true, text: "Last 90 days" } },
+            y: { title: { display: true, text: "Search interest (0-100)" }, min: 0 },
+        },
+        plugins: { legend: { position: "bottom" } },
+    },
+});
+
+document.querySelectorAll(".term-toggle").forEach(cb => {
+    cb.addEventListener("change", () => {
+        const dataset = chart.data.datasets.find(d => d._term === cb.dataset.term);
+        if (dataset) {
+            dataset.hidden = !cb.checked;
+            chart.update();
+        }
+    });
+});
+</script>
+{% endif %}
+{% endblock %}

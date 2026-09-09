@@ -1,0 +1,51 @@
+"""Shared interface every signal source implements.
+
+Adding a new source (Reddit, Meta Ads, TikTok, ...) means writing one
+class here that implements `is_configured` and `fetch_signals`, then
+registering it in `app/sources/__init__.py`'s ACTIVE_SOURCES-equivalent in
+main.py. Nothing else in the app needs to change.
+"""
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+
+
+@dataclass
+class TermSignal:
+    term: str
+    source: str
+    score: float
+    growth_pct: float | None = None
+    momentum_pct: float | None = None
+    avg_interest: float | None = None
+    competition_estimate: int | None = None
+    competition_label: str | None = None
+    ad_library_url: str | None = None
+    series: list[dict] = field(default_factory=list)  # [{"date": "...", "value": 0}]
+
+    def as_dict(self) -> dict:
+        return {
+            "term": self.term,
+            "source": self.source,
+            "score": self.score,
+            "growth_pct": self.growth_pct,
+            "momentum_pct": self.momentum_pct,
+            "avg_interest": self.avg_interest,
+            "competition_estimate": self.competition_estimate,
+            "competition_label": self.competition_label,
+            "ad_library_url": self.ad_library_url,
+            "series": self.series,
+        }
+
+
+class SignalSource(ABC):
+    name: str
+
+    @abstractmethod
+    def is_configured(self) -> bool:
+        """Whether the credentials/config this source needs are present."""
+
+    @abstractmethod
+    def fetch_signals(self, niche: str, max_terms: int) -> list[TermSignal]:
+        """Return demand signals for terms related to `niche`."""
