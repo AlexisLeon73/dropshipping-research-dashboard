@@ -22,12 +22,14 @@ in competition_estimate/top_advertisers; see the override in
 `app.main.run_search` that keeps a term's Meta Ads data even when another
 source wins the "primary display" slot for that term.
 
-v1 scope: like Reddit, this only searches the niche term itself, not each
-of Google Trends' individual related terms — ads_archive has no "related
-terms" endpoint, so covering every Trends-discovered term would mean one
-ads_archive call per term (fine against the 200/hour limit for a handful
-of terms, but that's cross-source wiring `run_search` doesn't do today —
-each source only ever receives the niche and max_terms).
+ads_archive has no "related terms" endpoint — given one term, this module
+only ever knows how to search for ads matching that exact term. That's
+why `per_term = True`: `app.main.run_search` calls fetch_signals once per
+term Google Trends discovered (falling back to just the bare niche if
+Trends found nothing), so this still ends up covering every candidate
+term — it's just not this module's job to discover them. With ~10 terms
+per search that's up to ~50 requests (5 pages/term), comfortably under
+the 200/hour limit for a single search.
 """
 from __future__ import annotations
 
@@ -76,6 +78,7 @@ def _with_retry(fn, *args, **kwargs):
 
 class MetaAdsSource(SignalSource):
     name = "meta_ads"
+    per_term = True
 
     def is_configured(self) -> bool:
         return bool(settings.meta_access_token)

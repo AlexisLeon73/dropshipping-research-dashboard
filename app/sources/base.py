@@ -61,10 +61,29 @@ class TermSignal:
 class SignalSource(ABC):
     name: str
 
+    # False (default): this source discovers its own related terms from
+    # the niche in one fetch_signals(niche, max_terms) call (only Google
+    # Trends does this today, via its related-queries feature).
+    #
+    # True: this source has no "related terms" feature of its own — it
+    # only ever looks up exactly the single term it's given. Reddit and
+    # Meta Ads Library are both like this. `run_search` in app/main.py
+    # calls a per_term=True source once per term Google Trends discovered
+    # (falling back to just the bare niche if no discovery source ran),
+    # so these sources still end up covering every candidate term, not
+    # just the niche itself — fetch_signals(term, max_terms) is called
+    # once with each term standing in for `niche`.
+    per_term: bool = False
+
     @abstractmethod
     def is_configured(self) -> bool:
         """Whether the credentials/config this source needs are present."""
 
     @abstractmethod
     def fetch_signals(self, niche: str, max_terms: int) -> list[TermSignal]:
-        """Return demand signals for terms related to `niche`."""
+        """Return demand signals for terms related to `niche`.
+
+        For a per_term=True source, `niche` here may be any single term
+        `run_search` wants looked up (the bare niche or a term Google
+        Trends discovered) — not necessarily the original search niche.
+        """

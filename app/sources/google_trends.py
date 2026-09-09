@@ -60,6 +60,9 @@ def _with_retry(fn, *args, **kwargs):
 
 class GoogleTrendsSource(SignalSource):
     name = "google_trends"
+    # per_term = False (default): this is the source that *discovers* the
+    # candidate term list from the niche via related_queries(), which
+    # app.main.run_search then feeds to the per_term=True sources.
 
     def __init__(self):
         self._pytrends = None

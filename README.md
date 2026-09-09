@@ -20,10 +20,10 @@ and Amazon Movers & Shakers are intentionally not: see below.
 | Source | Status | Notes |
 |---|---|---|
 | Google Trends | ✅ Implemented | No API key. Unofficial (scrapes trends.google.com via `pytrends`), rate-limits hard. This is the **discovery** layer — finds candidate terms. |
-| Reddit | ✅ Implemented | Official OAuth2 API (client_credentials grant), needs `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET`. Reports one signal per niche (post-volume growth), not per related term — see `app/sources/reddit.py`. |
-| Meta Ads Library | ✅ Implemented | Official Ad Library API (`ads_archive`), needs `META_ACCESS_TOKEN`. This is the **validation** layer — see below. |
+| Reddit | ✅ Implemented | Official OAuth2 API (client_credentials grant), needs `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET`. Has no "related terms" feature of its own, so it's queried once per term Google Trends discovers — see below. |
+| Meta Ads Library | ✅ Implemented | Official Ad Library API (`ads_archive`), needs `META_ACCESS_TOKEN`. This is the **validation** layer — see below. Also queried once per Trends-discovered term, not just the bare niche. |
 | TikTok | ⏸️ Paused, stub only | No public API; the only option is reverse-engineering TikTok Creative Center's undocumented internal endpoints, which can't be verified without live access to the site. Decided this wasn't worth the risk of shipping code that silently doesn't work — effort went into Meta Ads Library instead, which is the stronger buy-signal anyway. The stub and integration notes are still in `app/sources/tiktok.py` if you want to pick it up later with real browser devtools access. |
-| Amazon Movers & Shakers | 🔗 Manual link only | No public API; scraping amazon.com violates its ToS, so this is intentionally not automated. |
+| Amazon Movers & Shakers | 🔗 Manual link only | No public API; scraping amazon.com violates its ToS, so this is intentionally not automated — a "Check Amazon Movers & Shakers ↗" button on every results page links to it for manual browsing instead. |
 
 ### Why Meta Ads Library is the priority, not just another source
 
@@ -41,17 +41,35 @@ covers, Meta Ads Library reports:
   `ad_snapshot_url` — so instead of a bare count you get "here's who's
   doing it, go look at what they're selling and how."
 
+### Discovery vs. per-term sources
+
+Sources split into two kinds (`SignalSource.per_term` in
+`app/sources/base.py`):
+
+- **Discovery** (`per_term = False`, only Google Trends today): runs once
+  against the bare niche and discovers the candidate term list itself, via
+  Trends' related-queries feature.
+- **Per-term** (`per_term = True`: Reddit, Meta Ads, and the TikTok stub):
+  these have no "related terms" feature of their own — given one term,
+  that's the only term they know how to look up. `run_search()` in
+  `app/main.py` calls a per-term source once for **each** term Google
+  Trends discovered, not just the bare niche, so competition data and top
+  advertisers end up covering every candidate term Trends surfaces (e.g.
+  "cocina organizador", not only "cocina" itself). If no discovery source
+  produced anything (Trends unconfigured, rate-limited, or just not
+  running), per-term sources fall back to querying the bare niche alone,
+  same as before this existed.
+
 ### How multiple sources combine on the same term
 
-Google Trends, Reddit, and Meta Ads can all report a signal for the same
-term (most often the bare niche itself, since only Trends has a "related
-terms" feature — Reddit and Meta Ads both operate on the niche term
-directly). When that happens, `run_search()` in `app/main.py` folds every
-source's score for that term into `combine_source_scores()` — nothing is
-silently dropped just because multiple sources agree on a term. The
-90-day chart, growth/momentum numbers, and ad-inspection link still come
-from a single "primary" source per term, ranked by `PRIMARY_SOURCE_PRIORITY`
-(Google Trends first, since its series has real daily granularity). The
+Because of the above, multiple sources will often report the very same
+term (most reliably the bare niche, which every source touches one way or
+another). When that happens, `run_search()` folds every source's score
+for that term into `combine_source_scores()` — nothing is silently
+dropped just because multiple sources agree on a term. The 90-day chart,
+growth/momentum numbers, and ad-inspection link still come from a single
+"primary" source per term, ranked by `PRIMARY_SOURCE_PRIORITY` (Google
+Trends first, since its series has real daily granularity). The
 **Competition** and **Top advertisers** columns are the exception: since
 Meta Ads is currently the only source that ever fills them with real
 data, those fields specifically come from Meta Ads whenever it reported
@@ -94,11 +112,14 @@ mocked in the test suite (`tests/test_pipeline.py`, `tests/test_reddit.py`,
 scoring/storage/merge code as the real thing — including regression tests
 for the multi-source merge logic
 (`test_multi_source_merge_combines_scores_instead_of_dropping_one`,
-`test_meta_ads_competition_data_wins_even_when_trends_is_primary`). When
-you run this locally with normal internet access, `pytrends`, the Reddit
-client, and the Meta Graph API client will make real calls — you may still
-see occasional Trends 429s (see above), which the retry/cache logic is
-built to absorb.
+`test_meta_ads_competition_data_wins_even_when_trends_is_primary`) and for
+the discovery/per-term orchestration
+(`test_per_term_sources_are_queried_once_per_discovered_term`,
+`test_per_term_sources_fall_back_to_bare_niche_when_no_discovery_source_available`).
+When you run this locally with normal internet access, `pytrends`, the
+Reddit client, and the Meta Graph API client will make real calls — you
+may still see occasional Trends 429s (see above), which the retry/cache
+logic is built to absorb.
 
 ## Requirements
 
@@ -204,8 +225,8 @@ tests/
   test_db_migration.py         Regression test for the term_signals column
                                 migrations (old DB -> new schema, in place)
   test_pipeline.py                Full pipeline test through the real FastAPI
-                                   app, including the multi-source score-merge
-                                   behavior
+                                   app: multi-source score-merge, and the
+                                   discovery/per-term orchestration
 ```
 
 ## Running the tests
@@ -219,13 +240,17 @@ pytest
 1. Fill in the credentials in `.env` (see `.env.example`).
 2. Implement `fetch_signals()` in the corresponding module under
    `app/sources/` — the integration plan and rate-limit numbers are
-   already in that file's docstring.
+   already in that file's docstring. `per_term` is already set to `True`
+   on `TikTokSource` (Creative Center's Keyword Insights is a
+   single-keyword lookup, same as Reddit/Meta Ads) — leave it as-is
+   unless the implementation actually discovers its own related terms.
 3. Add the source instance to `ACTIVE_SOURCES` in `app/main.py`, and give
    it a position in `PRIMARY_SOURCE_PRIORITY` (where it should rank when
    it shares a term with another source).
 
 Nothing else needs to change: `run_search()` already loops over every
-configured, implemented source, merges signals per term (combining scores
-via `scoring.combine_source_scores()` even when multiple sources report
-the same term), and the results page/CSV already show which sources
-contributed to each row.
+configured, implemented source — calling per_term sources once per
+Trends-discovered term automatically — merges signals per term (combining
+scores via `scoring.combine_source_scores()` even when multiple sources
+report the same term), and the results page/CSV already show which
+sources contributed to each row.

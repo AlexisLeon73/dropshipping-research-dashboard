@@ -13,6 +13,7 @@ from app import db
 from app.config import settings
 from app.export import term_signals_to_csv
 from app.scoring import combine_source_scores
+from app.sources import amazon
 from app.sources.base import SignalSource
 from app.sources.google_trends import GoogleTrendsSource
 from app.sources.meta_ads import MetaAdsSource
@@ -46,8 +47,23 @@ def run_search(niche: str, max_terms: int) -> list[dict]:
     """Fetch signals from every configured+implemented source and combine
     them into one score per term.
 
-    Different sources can report the same term (e.g. Google Trends,
-    Reddit, and Meta Ads all report the bare niche term). When that
+    Two passes, because sources split into two kinds (see
+    SignalSource.per_term):
+
+    1. Discovery sources (per_term=False — just Google Trends today) run
+       once against the bare niche and discover the candidate term list
+       via their own related-terms feature.
+    2. Per-term sources (per_term=True — Reddit, Meta Ads) have no
+       related-terms feature of their own, so they're called once for
+       EACH discovered term instead of just the niche. This is what makes
+       competition_estimate/top_advertisers available for every candidate
+       term Trends surfaces, not only the bare niche. If no discovery
+       source produced anything (Trends unconfigured, rate-limited, or
+       simply not in ACTIVE_SOURCES), per-term sources still run against
+       the bare niche as a fallback.
+
+    Different sources can report the same term (most reliably the bare
+    niche, which every source touches one way or another). When that
     happens, every source's score for that term feeds
     combine_source_scores() — nothing is silently dropped just because
     multiple sources agree on a term. Display fields that only make sense
@@ -62,7 +78,15 @@ def run_search(niche: str, max_terms: int) -> list[dict]:
     per_term_scores: dict[str, dict[str, float]] = {}
     per_term_signals: dict[str, dict[str, dict]] = {}
 
+    def record(signal):
+        per_term_scores.setdefault(signal.term, {})[signal.source] = signal.score
+        per_term_signals.setdefault(signal.term, {})[signal.source] = signal.as_dict()
+
+    discovered_terms = [niche]
+
     for source in ACTIVE_SOURCES:
+        if source.per_term:
+            continue
         if not source.is_configured():
             logging.info("%s not configured, skipping", source.name)
             continue
@@ -76,8 +100,28 @@ def run_search(niche: str, max_terms: int) -> list[dict]:
             )
             continue
         for signal in results:
-            per_term_scores.setdefault(signal.term, {})[signal.source] = signal.score
-            per_term_signals.setdefault(signal.term, {})[signal.source] = signal.as_dict()
+            record(signal)
+        if results:
+            discovered_terms = [signal.term for signal in results][:max_terms]
+
+    for source in ACTIVE_SOURCES:
+        if not source.per_term:
+            continue
+        if not source.is_configured():
+            logging.info("%s not configured, skipping", source.name)
+            continue
+        for term in discovered_terms:
+            try:
+                results = source.fetch_signals(term, max_terms)
+            except NotImplementedError:
+                break  # not actually implemented — no point retrying other terms
+            except Exception:
+                logging.exception(
+                    "%s failed for term=%r, skipping this term", source.name, term
+                )
+                continue
+            for signal in results:
+                record(signal)
 
     final_signals = []
     for term, sources_data in per_term_signals.items():
@@ -162,6 +206,7 @@ def results(request: Request, run_id: int):
             "chart_series_json": json.dumps(chart_series),
             "previous_run": previous_run,
             "other_runs": other_runs,
+            "amazon_movers_and_shakers_url": amazon.manual_link(),
         },
     )
 

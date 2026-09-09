@@ -193,3 +193,74 @@ def test_meta_ads_competition_data_wins_even_when_trends_is_primary(monkeypatch)
     assert merged["competition_estimate"] == 42
     assert merged["competition_label"] == "42 active ads matching this term (Meta Ad Library)"
     assert merged["sources"] == ["google_trends", "meta_ads"]
+
+
+def test_per_term_sources_are_queried_once_per_discovered_term(monkeypatch):
+    """This is the actual fix: before it, Reddit/Meta Ads only ever looked
+    up the bare niche, so every other term Google Trends discovered had no
+    real competition data. Now run_search calls a per_term=True source
+    once for EACH term Trends surfaces, so every candidate term — not just
+    the niche — gets its own Meta Ads lookup.
+    """
+    def fake_trends(niche, max_terms):
+        return [
+            _make_signal(niche, list(range(5, 95))),
+            _make_signal(f"{niche} gear", [50] * 90),
+            _make_signal(f"{niche} tracker", [30] * 90),
+        ][:max_terms]
+
+    calls = []
+
+    def fake_meta_ads(term, max_terms):
+        calls.append(term)
+        return [
+            TermSignal(
+                term=term,
+                source="meta_ads",
+                score=20.0,
+                competition_estimate=len(calls),  # distinct per call, in call order
+                competition_label=f"{len(calls)} active ads matching this term (Meta Ad Library)",
+                ad_library_url=f"https://www.facebook.com/ads/library/?q={term}",
+                series=_series([10] * 90),
+            )
+        ]
+
+    monkeypatch.setattr(ACTIVE_SOURCES[0], "fetch_signals", fake_trends)
+    monkeypatch.setattr(ACTIVE_SOURCES[2], "fetch_signals", fake_meta_ads)
+    monkeypatch.setattr(ACTIVE_SOURCES[2], "is_configured", lambda: True)
+
+    signals = run_search("fitness", max_terms=10)
+
+    assert calls == ["fitness", "fitness gear", "fitness tracker"]
+    assert len(signals) == 3
+    competition_by_term = {s["term"]: s["competition_estimate"] for s in signals}
+    assert competition_by_term == {"fitness": 1, "fitness gear": 2, "fitness tracker": 3}
+
+
+def test_per_term_sources_fall_back_to_bare_niche_when_no_discovery_source_available(monkeypatch):
+    """If Google Trends produces nothing (unconfigured, rate-limited, or
+    just not in ACTIVE_SOURCES), per_term sources should still run against
+    the bare niche instead of not running at all.
+    """
+    monkeypatch.setattr(ACTIVE_SOURCES[0], "is_configured", lambda: False)
+
+    calls = []
+
+    def fake_meta_ads(term, max_terms):
+        calls.append(term)
+        return [
+            TermSignal(
+                term=term, source="meta_ads", score=10.0,
+                competition_estimate=1, competition_label="1 active ads matching this term (Meta Ad Library)",
+                series=[],
+            )
+        ]
+
+    monkeypatch.setattr(ACTIVE_SOURCES[2], "fetch_signals", fake_meta_ads)
+    monkeypatch.setattr(ACTIVE_SOURCES[2], "is_configured", lambda: True)
+
+    signals = run_search("fitness", max_terms=10)
+
+    assert calls == ["fitness"]
+    assert len(signals) == 1
+    assert signals[0]["term"] == "fitness"

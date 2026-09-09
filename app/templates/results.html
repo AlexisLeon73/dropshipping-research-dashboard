@@ -5,8 +5,14 @@
     <p class="muted">Run #{{ run['id'] }} — {{ run['created_at'] }}</p>
     <div class="actions">
         <a href="/export/{{ run['id'] }}.csv" class="button">Export CSV</a>
+        <a href="{{ amazon_movers_and_shakers_url }}" target="_blank" rel="noopener" class="button secondary">Check Amazon Movers &amp; Shakers ↗</a>
         <a href="/" class="button secondary">New search</a>
     </div>
+    <p class="muted">
+        Amazon has no public API for this and scraping it violates their
+        ToS, so this is a manual check — browse to the closest department
+        yourself to see what's trending right now.
+    </p>
     {% if previous_run %}
     <p class="muted">Compared against previous run #{{ previous_run['id'] }} ({{ previous_run['created_at'] }}) for the same niche.</p>
     {% else %}

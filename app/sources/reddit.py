@@ -9,15 +9,17 @@ app/sources/google_trends.py (cache TTL: REDDIT_CACHE_TTL_HOURS, default
 6h — shorter than Trends' because Reddit discussion moves faster than
 search-interest trends).
 
-v1 scope: Reddit has no "related queries" endpoint like Google Trends
-does, so this source returns a single TermSignal for the niche term
-itself — not a list of related terms. It searches Reddit for posts
-mentioning the niche over the last year, buckets them into a 90-day daily
-post-count series, normalizes that to a 0-100 scale, and scores it with
-the exact same growth/momentum formula used for Trends (post volume
-standing in for search interest). Extending this to score Trends'
-individual related terms too would mean one Reddit search call per term —
-budget that against the 60 req/min limit before doing it.
+Reddit has no "related queries" endpoint like Google Trends does — given
+one term, this source only ever knows how to search Reddit for posts
+mentioning that exact term over the last year, bucket them into a 90-day
+daily post-count series, normalize that to a 0-100 scale, and score it
+with the exact same growth/momentum formula used for Trends (post volume
+standing in for search interest). That's why `per_term = True`:
+`app.main.run_search` calls fetch_signals once per term Google Trends
+discovered (falling back to just the bare niche if Trends found nothing),
+so this still ends up covering every candidate term — it's just not this
+module's job to discover them. With ~10 terms per search that's up to
+~30 requests (3 pages/term), comfortably under the 60 req/min limit.
 """
 from __future__ import annotations
 
@@ -65,6 +67,7 @@ def _with_retry(fn, *args, **kwargs):
 
 class RedditSource(SignalSource):
     name = "reddit"
+    per_term = True
 
     def __init__(self):
         self._token: str | None = None
