@@ -10,7 +10,8 @@ You enter a niche (e.g. "cocina", "mascotas", "fitness"). The dashboard
 pulls related search terms, scores each one by demand-signal growth, plots
 its 90-day trend, and gives you a direct link to inspect real ads for that
 term manually. Every search is saved so you can compare a niche week over
-week.
+week. You can also run a **batch scan** across several niches at once and
+get back one combined, ranked list spanning all of them — see below.
 
 ## Current status
 
@@ -199,9 +200,40 @@ lists all past runs for that niche so you can track how a niche is
 trending over time.
 
 The schema has grown as sources were added (`sources`,
-`top_advertisers_json`). `init_db()` adds any missing columns to an
-existing `data/dashboard.db` automatically on startup — you don't need to
-delete it between updates.
+`top_advertisers_json`, and a `batches` table + `search_runs.batch_id` for
+batch scans below). `init_db()` adds any missing columns to an existing
+`data/dashboard.db` automatically on startup — you don't need to delete
+it between updates.
+
+## Batch scanning multiple niches
+
+The home page also has a **batch scan** box: enter several niches
+(comma- or newline-separated, capped at `MAX_NICHES_PER_BATCH`, default
+6), and it runs the full pipeline for each one — sequentially, one niche
+at a time, exactly as if you'd searched them individually — then shows
+one combined table with every term from every niche, ranked together by
+score. That's the actual point: instead of checking niches one by one to
+see which is hottest right now, you get a single prioritized view across
+all of them.
+
+Each niche's own search still gets its own run and its own full results
+page (chart, week-over-week deltas, everything a regular search gets) —
+the batch view links to each one — so nothing about single-niche search
+changes; batch scanning is purely additive.
+
+Because it's sequential, a batch of N niches takes roughly N times as
+long as one search (each niche still makes its own Trends/Reddit/Meta Ads
+calls) — for 6 niches that can be several minutes. There's no background
+job or progress bar; the request just runs until it's done, same as a
+single search does today, only longer. If you want more than
+`MAX_NICHES_PER_BATCH` at once, raise it in `.env` — there's no hard
+technical ceiling, just a longer wait and more API calls per source.
+
+The batch results page also has its own **Export CSV**
+(`/batch/{batch_id}/export.csv`) with a `niche` column identifying which
+niche each row came from, and a chart capped at the top 15 rows by score
+(a full batch's worth of lines — niches × terms each — would be
+unreadable on one chart).
 
 ## Exporting
 
@@ -228,18 +260,22 @@ app/
     meta_ads.py            Implemented
     tiktok.py                Stub — integration plan in the docstring
     amazon.py                  Manual link only, by design (ToS)
-  templates/            Jinja2 templates (Chart.js for the trend chart)
+  templates/            Jinja2 templates (Chart.js for the trend chart),
+                        including batch_results.html for batch scans
   static/                CSS
 tests/
   test_scoring.py        Unit tests for the scoring formulas
   test_reddit.py           Reddit source unit tests (token caching, bucketing)
   test_meta_ads.py           Meta Ads source unit tests (pagination, bucketing,
                               top-advertisers aggregation)
-  test_db_migration.py         Regression test for the term_signals column
-                                migrations (old DB -> new schema, in place)
-  test_pipeline.py                Full pipeline test through the real FastAPI
-                                   app: multi-source score-merge, and the
-                                   discovery/per-term orchestration
+  test_db_migration.py         Regression test for all schema migrations
+                                (old DB -> new schema, in place)
+  test_batch.py                   Batch scan: niche-list parsing, db
+                                   functions, and the full /batch-search ->
+                                   /batch/{id} -> CSV pipeline
+  test_pipeline.py                   Full pipeline test through the real
+                                      FastAPI app: multi-source score-merge,
+                                      and the discovery/per-term orchestration
 ```
 
 ## Running the tests

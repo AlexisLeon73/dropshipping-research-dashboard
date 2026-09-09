@@ -51,6 +51,9 @@ class Settings:
     db_path: str = os.getenv("DB_PATH", "data/dashboard.db")
     max_terms_per_search: int = int(os.getenv("MAX_TERMS_PER_SEARCH", "10"))
     cache_dir: str = os.getenv("CACHE_DIR", "data/cache")
+    # A batch scan runs the full pipeline once per niche, sequentially —
+    # capped so one batch can't turn into an unbounded, unattended wait.
+    max_niches_per_batch: int = int(os.getenv("MAX_NICHES_PER_BATCH", "6"))
 
 
 settings = Settings()

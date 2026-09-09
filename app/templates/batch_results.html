@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="results-header">
+    <h1>Batch scan — {{ runs|length }} {{ "niche" if runs|length == 1 else "niches" }}</h1>
+    <p class="muted">Batch #{{ batch['id'] }} — {{ batch['created_at'] }}</p>
+    <div class="actions">
+        <a href="/batch/{{ batch['id'] }}/export.csv" class="button">Export CSV</a>
+        <a href="{{ amazon_movers_and_shakers_url }}" target="_blank" rel="noopener" class="button secondary">Check Amazon Movers &amp; Shakers ↗</a>
+        <a href="/" class="button secondary">New search</a>
+    </div>
+    <p class="muted">
+        Every term from every niche below, ranked together by score — the
+        point is to compare across niches at a glance, not per-niche
+        detail. Click a niche to see its own full results (chart,
+        week-over-week deltas) on its own page.
+    </p>
+    <p class="muted">
+        Niches in this batch:
+        {% for r in runs %}<a href="/results/{{ r['id'] }}">{{ r['niche'] }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
+    </p>
+</section>
+
+{% if not rows %}
+<section class="search-card">
+    <p><strong>No signals came back for any niche in this batch.</strong></p>
+    <p class="muted">
+        Google Trends is unofficial and rate-limits hard — this usually
+        means it returned an error (HTTP 429) or timed out for all of
+        them. Wait a few minutes and try again; results already cached
+        locally will still load instantly.
+    </p>
+</section>
+{% else %}
+<section class="chart-section">
+    <canvas id="trendChart" height="90"></canvas>
+    <p class="muted">Showing the top {{ rows[:15]|length }} rows by score — a full batch's worth of lines would be unreadable on one chart.</p>
+</section>
+
+<section>
+    <table class="results-table">
+        <thead>
+            <tr>
+                <th></th>
+                <th>Niche</th>
+                <th>Term</th>
+                <th>Score</th>
+                <th>Sources</th>
+                <th>Growth %</th>
+                <th>Momentum %</th>
+                <th>Avg interest</th>
+                <th>Competition</th>
+                <th>Top advertisers</th>
+                <th>Ads Library</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for row in rows %}
+            <tr>
+                <td><input type="checkbox" class="term-toggle" data-term="{{ row['niche'] }}: {{ row['term'] }}" checked></td>
+                <td><a href="/results/{{ row['run_id'] }}">{{ row['niche'] }}</a></td>
+                <td>{{ row['term'] }}</td>
+                <td><strong>{{ "%.1f"|format(row['score']) }}</strong></td>
+                <td class="muted">{{ row['sources'].replace(',', ' + ') }}</td>
+                <td>{{ row['growth_pct'] }}%</td>
+                <td>{{ row['momentum_pct'] }}%</td>
+                <td>{{ row['avg_interest'] }}</td>
+                <td class="muted" title="{{ row['competition_label'] }}">
+                    {{ row['competition_estimate'] if row['competition_estimate'] is not none else 'N/A' }}
+                </td>
+                <td>
+                    {% if row['top_advertisers'] %}
+                        {% for adv in row['top_advertisers'][:3] %}
+                            {% if adv['sample_ad_url'] %}<a href="{{ adv['sample_ad_url'] }}" target="_blank" rel="noopener" title="{{ adv['ad_count'] }} active ads">{{ adv['page_name'] }}</a>
+                            {% else %}<span title="{{ adv['ad_count'] }} active ads">{{ adv['page_name'] }}</span>{% endif %}{% if not loop.last %}, {% endif %}
+                        {% endfor %}
+                    {% else %}<span class="muted">—</span>{% endif %}
+                </td>
+                <td><a href="{{ row['ad_library_url'] }}" target="_blank" rel="noopener">inspect ads ↗</a></td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script>
+const seriesData = {{ chart_series_json | safe }};
+const palette = ["#2563eb","#dc2626","#16a34a","#ca8a04","#7c3aed","#0891b2","#db2777","#65a30d","#ea580c","#4f46e5"];
+
+function buildDatasets() {
+    const keys = Object.keys(seriesData);
+    return keys.map((key, i) => ({
+        label: key,
+        data: seriesData[key].map(p => ({x: p.date, y: p.value})),
+        borderColor: palette[i % palette.length],
+        backgroundColor: "transparent",
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.25,
+        hidden: false,
+        _term: key,
+    }));
+}
+
+const ctx = document.getElementById("trendChart");
+const chart = new Chart(ctx, {
+    type: "line",
+    data: { datasets: buildDatasets() },
+    options: {
+        responsive: true,
+        interaction: { mode: "nearest", intersect: false },
+        scales: {
+            x: { type: "time", time: { unit: "week" }, title: { display: true, text: "Last 90 days" } },
+            y: { title: { display: true, text: "Search interest (0-100)" }, min: 0 },
+        },
+        plugins: { legend: { position: "bottom" } },
+    },
+});
+
+document.querySelectorAll(".term-toggle").forEach(cb => {
+    cb.addEventListener("change", () => {
+        const dataset = chart.data.datasets.find(d => d._term === cb.dataset.term);
+        if (dataset) {
+            dataset.hidden = !cb.checked;
+            chart.update();
+        }
+    });
+});
+</script>
+{% endif %}
+{% endblock %}

@@ -13,6 +13,21 @@
     </form>
 </section>
 
+<section class="search-card">
+    <h1>Batch scan (up to {{ max_niches_per_batch }} niches)</h1>
+    <p class="muted">
+        Compare several niches at once. One per line or separated by
+        commas — each one runs the full pipeline, then you get a single
+        list ranked by score across all of them, to see what's hottest
+        right now without checking niches one by one. This takes several
+        minutes (a niche at a time, sequentially) — don't close the tab.
+    </p>
+    <form action="/batch-search" method="post" class="search-form">
+        <textarea name="niches" rows="3" placeholder="cocina, mascotas, fitness" required style="flex:1; padding:10px 14px; border:1px solid #d1d5db; border-radius:8px; font:inherit; resize:vertical;"></textarea>
+        <button type="submit">Run batch</button>
+    </form>
+</section>
+
 <section>
     <h2>Recent searches</h2>
     {% if recent_runs %}
@@ -32,6 +47,28 @@
     </table>
     {% else %}
     <p class="muted">No searches yet.</p>
+    {% endif %}
+</section>
+
+<section>
+    <h2>Recent batch scans</h2>
+    {% if recent_batches %}
+    <table class="runs-table">
+        <thead>
+            <tr><th>Batch</th><th>Date</th><th></th></tr>
+        </thead>
+        <tbody>
+        {% for batch in recent_batches %}
+            <tr>
+                <td>#{{ batch["id"] }}</td>
+                <td>{{ batch["created_at"] }}</td>
+                <td><a href="/batch/{{ batch['id'] }}">View results</a></td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No batch scans yet.</p>
     {% endif %}
 </section>
 {% endblock %}
