@@ -93,6 +93,19 @@ always lists every source that contributed to that row's score.
 - **Relative, not absolute, numbers.** Trends values are 0-100 relative to
   the peak in the selected window — they tell you about *direction* and
   *momentum*, not units sold or absolute search volume.
+- **Related terms aren't product-aware — they're just "what else people
+  searched."** For a broad niche word, that can pull in unrelated current
+  events that happen to share the word (e.g. searching "mascotas" pulled
+  in "mascota del mundial" — World Cup mascots — instead of pet products).
+  `GOOGLE_TRENDS_CATEGORY` (default `18` = Shopping) restricts every
+  request to a Google category to bias results toward buying intent and
+  cut most of that noise; set it to `0` for unrestricted results. This
+  helps a lot but doesn't fully solve it — a generic niche will still
+  surface topic-level terms (types of products) rather than one specific
+  product, which is inherent to how broad the seed word is, not something
+  a category filter alone fixes. More specific niche input (e.g. "correa
+  para perro" instead of "mascotas") gets you closer to product-level
+  results directly.
 - **This is a prioritization heuristic, not a prediction.** It tells you
   what to look at first. Always inspect the actual ads (the "inspect ads"
   link per term) before committing budget to test a product.

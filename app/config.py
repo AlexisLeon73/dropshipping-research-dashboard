@@ -26,6 +26,12 @@ class Settings:
     google_trends_cache_ttl_hours: float = float(
         os.getenv("GOOGLE_TRENDS_CACHE_TTL_HOURS", "12")
     )
+    # Google's own category id to restrict results to. 18 = Shopping —
+    # this cuts a lot of off-topic noise (news, pop culture, sports) that
+    # a broad niche word like "mascotas" would otherwise pull in (e.g. World
+    # Cup mascots). 0 = all categories, for niches where that noise doesn't
+    # matter or you want the broadest possible related-terms list.
+    google_trends_category: int = int(os.getenv("GOOGLE_TRENDS_CATEGORY", "18"))
 
     # Reddit
     reddit_client_id: str = os.getenv("REDDIT_CLIENT_ID", "")
