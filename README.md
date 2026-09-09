@@ -14,32 +14,36 @@ week.
 
 ## Current status
 
-**Google Trends and Reddit are implemented.** Meta Ads Library, TikTok,
-and Amazon Movers & Shakers are stubbed out as independent modules under
+**Google Trends, Reddit, and Meta Ads Library are implemented.** TikTok
+and Amazon Movers & Shakers are stubbed out / manual-link-only under
 `app/sources/` with the integration plan documented in each file's
-docstring — adding one is meant to be a self-contained follow-up, not a
+docstring — adding TikTok is meant to be a self-contained follow-up, not a
 redesign.
 
 | Source | Status | Notes |
 |---|---|---|
 | Google Trends | ✅ Implemented | No API key. Unofficial (scrapes trends.google.com via `pytrends`), rate-limits hard. |
 | Reddit | ✅ Implemented | Official OAuth2 API (client_credentials grant), needs `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET`. Reports one signal per niche (post-volume growth), not per related term — see `app/sources/reddit.py`. |
-| Meta Ads Library | 🚧 Stub only | Official API, needs `META_ACCESS_TOKEN`. Will also fill in the competition column. |
+| Meta Ads Library | ✅ Implemented | Official Ad Library API (`ads_archive`), needs `META_ACCESS_TOKEN`. Fills in the **Competition** column with a real active-ad count — see `app/sources/meta_ads.py`. Also reports one signal per niche, same v1 scope as Reddit. |
 | TikTok | 🚧 Stub only | No usable public API — best-effort scrape of TikTok Creative Center, inherently fragile. |
 | Amazon Movers & Shakers | 🔗 Manual link only | No public API; scraping amazon.com violates its ToS, so this is intentionally not automated. |
 
 ### How multiple sources combine on the same term
 
-Google Trends and Reddit can both report a signal for the same term (most
-often the bare niche itself, since Reddit doesn't have a "related terms"
-feature the way Trends does). When that happens, `run_search()` in
-`app/main.py` folds every source's score for that term into
-`combine_source_scores()` — nothing is silently dropped just because two
-sources agree on a term. The 90-day chart, growth/momentum numbers, and
-ad-inspection link still come from a single "primary" source per term
-(Google Trends outranks Reddit in `PRIMARY_SOURCE_PRIORITY`, since its
-series has real daily granularity), but the **Sources** column on the
-results page and in the CSV export always lists every source that
+Google Trends, Reddit, and Meta Ads can all report a signal for the same
+term (most often the bare niche itself, since only Trends has a "related
+terms" feature — Reddit and Meta Ads both operate on the niche term
+directly). When that happens, `run_search()` in `app/main.py` folds every
+source's score for that term into `combine_source_scores()` — nothing is
+silently dropped just because multiple sources agree on a term. The
+90-day chart, growth/momentum numbers, and ad-inspection link still come
+from a single "primary" source per term, ranked by `PRIMARY_SOURCE_PRIORITY`
+(Google Trends first, since its series has real daily granularity). The
+**Competition** column is the one exception: since Meta Ads is currently
+the only source that ever fills it with real data, that field specifically
+comes from Meta Ads whenever it reported the term, regardless of which
+source won the primary slot for everything else. The **Sources** column
+on the results page and in the CSV export always lists every source that
 contributed to that row's score.
 
 ## Honest limitations of Google Trends / pytrends
@@ -66,26 +70,31 @@ contributed to that row's score.
 
 This app was built and tested in a sandboxed environment with no general
 internet access (only a small dev-tooling allowlist — pypi, npm, github,
-etc.). That means the actual live calls to `trends.google.com` and Reddit's
-API could not be exercised here — a real run there returns a
-`ProxyError`/403, which is this sandbox's network policy, not a bug in the
-code. Everything else was tested end-to-end for real: the live FastAPI
-server was started and hit with real HTTP requests (index → search →
-results → CSV export → history), and each source's network call is mocked
-in the test suite (`tests/test_pipeline.py`, `tests/test_reddit.py`) while
-running through the exact same scoring/storage/merge code as the real
-thing — including a regression test for the multi-source score-merging
-logic (`test_multi_source_merge_combines_scores_instead_of_dropping_one`).
-When you run this locally with normal internet access, `pytrends` and the
-Reddit client will make real calls — you may still see occasional Trends
-429s (see above), which the retry/cache logic is built to absorb.
+etc.). That means the actual live calls to `trends.google.com`, Reddit's
+API, and the Meta Graph API could not be exercised here — a real run there
+returns a `ProxyError`/403, which is this sandbox's network policy, not a
+bug in the code. Everything else was tested end-to-end for real: the live
+FastAPI server was started and hit with real HTTP requests (index → search
+→ results → CSV export → history), and each source's network call is
+mocked in the test suite (`tests/test_pipeline.py`, `tests/test_reddit.py`,
+`tests/test_meta_ads.py`) while running through the exact same
+scoring/storage/merge code as the real thing — including regression tests
+for the multi-source merge logic
+(`test_multi_source_merge_combines_scores_instead_of_dropping_one`,
+`test_meta_ads_competition_data_wins_even_when_trends_is_primary`). When
+you run this locally with normal internet access, `pytrends`, the Reddit
+client, and the Meta Graph API client will make real calls — you may still
+see occasional Trends 429s (see above), which the retry/cache logic is
+built to absorb.
 
 ## Requirements
 
 - Python 3.11+
-- Internet access (for the Google Trends and Reddit calls)
+- Internet access (for the Google Trends, Reddit, and Meta Ads calls)
 - Optional: a Reddit "script" app (`REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET`)
-  if you want Reddit signals — Google Trends alone needs no credentials.
+  and/or a Meta app with Ad Library API access (`META_ACCESS_TOKEN`) —
+  Google Trends alone needs no credentials, and any source without its
+  credentials is skipped automatically.
 
 ## Setup
 
@@ -93,12 +102,16 @@ Reddit client will make real calls — you may still see occasional Trends
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # fill in REDDIT_CLIENT_ID/SECRET if you want Reddit signals
+cp .env.example .env   # fill in REDDIT_ / META_ credentials if you want those signals
 ```
 
-Get a Reddit client id/secret at https://www.reddit.com/prefs/apps → create
-app → type "script". Without these, Reddit is skipped automatically and
-you still get full Google Trends results.
+- Reddit: create a "script" app at https://www.reddit.com/prefs/apps to get
+  `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET`.
+- Meta Ads Library: create an app at https://developers.facebook.com with
+  Ad Library API access to get `META_ACCESS_TOKEN`.
+
+Without either, that source is skipped automatically and you still get
+full results from whatever's configured.
 
 ## Run it
 
@@ -124,10 +137,11 @@ Documented in full in `app/scoring.py`. Short version: for each term's
 - The two are blended (60% growth, 40% momentum) into a single 0-100
   score.
 
-This is intentionally simple and inspectable — no hidden weights. Once
-Reddit / Meta Ads / TikTok are wired up, `combine_source_scores()` blends
-each source's own 0-100 score using the weights in `SOURCE_WEIGHTS`,
-renormalized over whichever sources actually returned data.
+This is intentionally simple and inspectable — no hidden weights. Reddit
+and Meta Ads scores are computed the same way from their own volume series
+(posts per day, ads started per day); `combine_source_scores()` blends
+whichever sources reported a given term using the weights in
+`SOURCE_WEIGHTS`, renormalized over just those sources.
 
 ## Data & history
 
@@ -141,8 +155,9 @@ trending over time.
 
 Every results page has an **Export CSV** button
 (`/export/{run_id}.csv`) with the full prioritized term list: score,
-growth %, momentum %, average interest, competition estimate (currently
-`N/A` until Meta Ads Library is wired up), and the ad-inspection link.
+contributing sources, growth %, momentum %, average interest, competition
+estimate (from Meta Ads Library when configured, `N/A` otherwise), and the
+ad-inspection link.
 
 ## Project layout
 
@@ -158,16 +173,17 @@ app/
     base.py             SignalSource interface + shared ads_library_url() helper
     google_trends.py     Implemented
     reddit.py             Implemented
-    meta_ads.py            Stub — integration plan in the docstring
-    tiktok.py               Stub — integration plan in the docstring
-    amazon.py                 Manual link only, by design (ToS)
+    meta_ads.py            Implemented
+    tiktok.py                Stub — integration plan in the docstring
+    amazon.py                  Manual link only, by design (ToS)
   templates/            Jinja2 templates (Chart.js for the trend chart)
   static/                CSS
 tests/
   test_scoring.py        Unit tests for the scoring formulas
   test_reddit.py           Reddit source unit tests (token caching, bucketing)
-  test_pipeline.py           Full pipeline test through the real FastAPI app,
-                              including the multi-source score-merge behavior
+  test_meta_ads.py           Meta Ads source unit tests (pagination, bucketing)
+  test_pipeline.py             Full pipeline test through the real FastAPI app,
+                                including the multi-source score-merge behavior
 ```
 
 ## Running the tests
@@ -176,7 +192,7 @@ tests/
 pytest
 ```
 
-## Adding the next source (Meta Ads or TikTok)
+## Adding the next source (TikTok)
 
 1. Fill in the credentials in `.env` (see `.env.example`).
 2. Implement `fetch_signals()` in the corresponding module under

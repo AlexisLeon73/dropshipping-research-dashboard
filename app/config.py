@@ -27,7 +27,7 @@ class Settings:
         os.getenv("GOOGLE_TRENDS_CACHE_TTL_HOURS", "12")
     )
 
-    # Reddit (future)
+    # Reddit
     reddit_client_id: str = os.getenv("REDDIT_CLIENT_ID", "")
     reddit_client_secret: str = os.getenv("REDDIT_CLIENT_SECRET", "")
     reddit_user_agent: str = os.getenv(
@@ -35,8 +35,11 @@ class Settings:
     )
     reddit_cache_ttl_hours: float = float(os.getenv("REDDIT_CACHE_TTL_HOURS", "6"))
 
-    # Meta Ads Library (future)
+    # Meta Ads Library
     meta_access_token: str = os.getenv("META_ACCESS_TOKEN", "")
+    # JSON-array string, as the Graph API expects it, e.g. '["US","MX"]'.
+    meta_ad_reached_countries: str = os.getenv("META_AD_REACHED_COUNTRIES", '["US"]')
+    meta_cache_ttl_hours: float = float(os.getenv("META_CACHE_TTL_HOURS", "6"))
 
     # App
     db_path: str = os.getenv("DB_PATH", "data/dashboard.db")

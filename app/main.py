@@ -15,13 +15,14 @@ from app.export import term_signals_to_csv
 from app.scoring import combine_source_scores
 from app.sources.base import SignalSource
 from app.sources.google_trends import GoogleTrendsSource
+from app.sources.meta_ads import MetaAdsSource
 from app.sources.reddit import RedditSource
 
 logging.basicConfig(level=logging.INFO)
 
-# Meta Ads / TikTok slot in here once implemented — nothing else in this
-# file needs to change. Order matters for PRIMARY_SOURCE_PRIORITY below.
-ACTIVE_SOURCES: list[SignalSource] = [GoogleTrendsSource(), RedditSource()]
+# TikTok slots in here once implemented — nothing else in this file needs
+# to change. Order matters for PRIMARY_SOURCE_PRIORITY below.
+ACTIVE_SOURCES: list[SignalSource] = [GoogleTrendsSource(), RedditSource(), MetaAdsSource()]
 
 # When more than one source reports the same term, its display fields
 # (series/growth/momentum/ad link) come from whichever configured source
@@ -45,13 +46,17 @@ def run_search(niche: str, max_terms: int) -> list[dict]:
     """Fetch signals from every configured+implemented source and combine
     them into one score per term.
 
-    Different sources can report the same term (e.g. Google Trends and
-    Reddit both report the bare niche term). When that happens, every
-    source's score for that term feeds combine_source_scores() — nothing
-    is silently dropped just because two sources agree on a term. Display
-    fields that only make sense from one source (the 90-day series,
-    growth/momentum, the ad-inspection link) come from whichever
-    configured source ranks highest in PRIMARY_SOURCE_PRIORITY.
+    Different sources can report the same term (e.g. Google Trends,
+    Reddit, and Meta Ads all report the bare niche term). When that
+    happens, every source's score for that term feeds
+    combine_source_scores() — nothing is silently dropped just because
+    multiple sources agree on a term. Display fields that only make sense
+    from one source (the 90-day series, growth/momentum, the
+    ad-inspection link) come from whichever configured source ranks
+    highest in PRIMARY_SOURCE_PRIORITY — except competition_estimate /
+    competition_label, which currently only Meta Ads ever fills in with
+    real data, so those two fields specifically come from Meta Ads
+    whenever it reported the term, regardless of who "wins" otherwise.
     """
     per_term_scores: dict[str, dict[str, float]] = {}
     per_term_signals: dict[str, dict[str, dict]] = {}
@@ -82,6 +87,14 @@ def run_search(niche: str, max_terms: int) -> list[dict]:
         data = dict(sources_data[primary_source])
         data["score"] = combine_source_scores(per_term_scores[term])
         data["sources"] = sorted(sources_data.keys())
+
+        # Competition data is currently only ever supplied by Meta Ads
+        # Library — use it even when another source won the primary slot.
+        meta_ads_data = sources_data.get("meta_ads")
+        if meta_ads_data and meta_ads_data.get("competition_estimate") is not None:
+            data["competition_estimate"] = meta_ads_data["competition_estimate"]
+            data["competition_label"] = meta_ads_data["competition_label"]
+
         final_signals.append(data)
 
     final_signals.sort(key=lambda s: s["score"], reverse=True)

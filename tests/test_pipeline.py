@@ -35,7 +35,7 @@ def _make_signal(term: str, values: list[float]) -> TermSignal:
         momentum_pct=scored["momentum_pct"],
         avg_interest=scored["avg_interest"],
         competition_estimate=None,
-        competition_label="Requires Meta Ads Library (not wired up yet)",
+        competition_label="No Meta Ads Library data for this term",
         ad_library_url=f"https://www.facebook.com/ads/library/?q={term}",
         series=_series(values),
     )
@@ -152,3 +152,38 @@ def test_multi_source_merge_end_to_end_via_http(monkeypatch):
         results_page = client.get(resp.headers["location"])
         assert results_page.status_code == 200
         assert "google_trends + reddit" in results_page.text
+
+
+def test_meta_ads_competition_data_wins_even_when_trends_is_primary(monkeypatch):
+    """Google Trends outranks Meta Ads in PRIMARY_SOURCE_PRIORITY, so its
+    series/growth/momentum win the display slot for a shared term — but
+    Meta Ads is the only source that ever fills in real competition data,
+    so that specific field must survive the merge regardless of who's
+    primary. This is the whole point of adding Meta Ads Library.
+    """
+    trends_signal = _make_signal("fitness", list(range(5, 95)))
+    meta_signal = TermSignal(
+        term="fitness",
+        source="meta_ads",
+        score=70.0,
+        growth_pct=10.0,
+        momentum_pct=10.0,
+        avg_interest=60.0,
+        competition_estimate=42,
+        competition_label="42 active ads matching this term (Meta Ad Library)",
+        ad_library_url="https://www.facebook.com/ads/library/?q=fitness",
+        series=_series([20] * 90),
+    )
+
+    monkeypatch.setattr(ACTIVE_SOURCES[0], "fetch_signals", lambda niche, max_terms: [trends_signal])
+    monkeypatch.setattr(ACTIVE_SOURCES[2], "fetch_signals", lambda niche, max_terms: [meta_signal])
+    monkeypatch.setattr(ACTIVE_SOURCES[2], "is_configured", lambda: True)
+
+    signals = run_search("fitness", max_terms=10)
+
+    assert len(signals) == 1
+    merged = signals[0]
+    assert merged["growth_pct"] == trends_signal.growth_pct  # Trends still primary
+    assert merged["competition_estimate"] == 42
+    assert merged["competition_label"] == "42 active ads matching this term (Meta Ad Library)"
+    assert merged["sources"] == ["google_trends", "meta_ads"]

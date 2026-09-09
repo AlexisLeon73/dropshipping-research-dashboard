@@ -160,7 +160,7 @@ class GoogleTrendsSource(SignalSource):
                         momentum_pct=scored["momentum_pct"],
                         avg_interest=scored["avg_interest"],
                         competition_estimate=None,
-                        competition_label="Requires Meta Ads Library (not wired up yet)",
+                        competition_label="No Meta Ads Library data for this term",
                         ad_library_url=ads_library_url(term),
                         series=series,
                     )
