@@ -157,9 +157,9 @@ def test_multi_source_merge_end_to_end_via_http(monkeypatch):
 def test_meta_ads_competition_data_wins_even_when_trends_is_primary(monkeypatch):
     """Google Trends outranks Meta Ads in PRIMARY_SOURCE_PRIORITY, so its
     series/growth/momentum win the display slot for a shared term — but
-    Meta Ads is the only source that ever fills in real competition data,
-    so that specific field must survive the merge regardless of who's
-    primary. This is the whole point of adding Meta Ads Library.
+    Meta Ads is the only source that ever fills in real competition data
+    and top advertisers, so those fields must survive the merge regardless
+    of who's primary. This is the whole point of adding Meta Ads Library.
     """
     trends_signal = _make_signal("fitness", list(range(5, 95)))
     meta_signal = TermSignal(
@@ -173,6 +173,9 @@ def test_meta_ads_competition_data_wins_even_when_trends_is_primary(monkeypatch)
         competition_label="42 active ads matching this term (Meta Ad Library)",
         ad_library_url="https://www.facebook.com/ads/library/?q=fitness",
         series=_series([20] * 90),
+        top_advertisers=[
+            {"page_name": "FitBrand", "ad_count": 12, "sample_ad_url": "https://fb.com/ad1"},
+        ],
     )
 
     monkeypatch.setattr(ACTIVE_SOURCES[0], "fetch_signals", lambda niche, max_terms: [trends_signal])
@@ -183,6 +186,9 @@ def test_meta_ads_competition_data_wins_even_when_trends_is_primary(monkeypatch)
 
     assert len(signals) == 1
     merged = signals[0]
+    assert merged["top_advertisers"] == [
+        {"page_name": "FitBrand", "ad_count": 12, "sample_ad_url": "https://fb.com/ad1"}
+    ]
     assert merged["growth_pct"] == trends_signal.growth_pct  # Trends still primary
     assert merged["competition_estimate"] == 42
     assert merged["competition_label"] == "42 active ads matching this term (Meta Ad Library)"

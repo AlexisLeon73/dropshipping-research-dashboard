@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS term_signals (
     competition_estimate INTEGER,
     competition_label TEXT,
     ad_library_url TEXT,
-    series_json TEXT NOT NULL
+    series_json TEXT NOT NULL,
+    top_advertisers_json TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE INDEX IF NOT EXISTS idx_search_runs_niche ON search_runs(niche);
@@ -47,9 +48,32 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+# Columns added to term_signals after its first release. CREATE TABLE IF
+# NOT EXISTS (in SCHEMA above) only helps a brand-new database — an
+# existing local data/dashboard.db from before a schema change needs
+# these added explicitly, or every insert into a missing column breaks.
+_TERM_SIGNALS_MIGRATIONS = {
+    "sources": "ALTER TABLE term_signals ADD COLUMN sources TEXT NOT NULL DEFAULT ''",
+    "top_advertisers_json": "ALTER TABLE term_signals ADD COLUMN top_advertisers_json TEXT NOT NULL DEFAULT '[]'",
+}
+
+
+def _migrate_term_signals(conn: sqlite3.Connection) -> None:
+    existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(term_signals)")}
+    for column, statement in _TERM_SIGNALS_MIGRATIONS.items():
+        if column in existing_columns:
+            continue
+        conn.execute(statement)
+        if column == "sources":
+            # Backfill from the older single-source column so existing
+            # rows still show something in the Sources column/CSV.
+            conn.execute("UPDATE term_signals SET sources = source WHERE sources = ''")
+
+
 def init_db() -> None:
     with _connect() as conn:
         conn.executescript(SCHEMA)
+        _migrate_term_signals(conn)
 
 
 @contextmanager
@@ -78,8 +102,9 @@ def save_term_signal(search_run_id: int, signal: dict) -> None:
             INSERT INTO term_signals (
                 search_run_id, term, source, sources, score, growth_pct,
                 momentum_pct, avg_interest, competition_estimate,
-                competition_label, ad_library_url, series_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                competition_label, ad_library_url, series_json,
+                top_advertisers_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 search_run_id,
@@ -94,6 +119,7 @@ def save_term_signal(search_run_id: int, signal: dict) -> None:
                 signal.get("competition_label"),
                 signal.get("ad_library_url"),
                 json.dumps(signal.get("series", [])),
+                json.dumps(signal.get("top_advertisers", [])),
             ),
         )
 

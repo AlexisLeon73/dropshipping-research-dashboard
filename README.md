@@ -15,18 +15,31 @@ week.
 ## Current status
 
 **Google Trends, Reddit, and Meta Ads Library are implemented.** TikTok
-and Amazon Movers & Shakers are stubbed out / manual-link-only under
-`app/sources/` with the integration plan documented in each file's
-docstring — adding TikTok is meant to be a self-contained follow-up, not a
-redesign.
+and Amazon Movers & Shakers are intentionally not: see below.
 
 | Source | Status | Notes |
 |---|---|---|
-| Google Trends | ✅ Implemented | No API key. Unofficial (scrapes trends.google.com via `pytrends`), rate-limits hard. |
+| Google Trends | ✅ Implemented | No API key. Unofficial (scrapes trends.google.com via `pytrends`), rate-limits hard. This is the **discovery** layer — finds candidate terms. |
 | Reddit | ✅ Implemented | Official OAuth2 API (client_credentials grant), needs `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET`. Reports one signal per niche (post-volume growth), not per related term — see `app/sources/reddit.py`. |
-| Meta Ads Library | ✅ Implemented | Official Ad Library API (`ads_archive`), needs `META_ACCESS_TOKEN`. Fills in the **Competition** column with a real active-ad count — see `app/sources/meta_ads.py`. Also reports one signal per niche, same v1 scope as Reddit. |
-| TikTok | 🚧 Stub only | No usable public API — best-effort scrape of TikTok Creative Center, inherently fragile. |
+| Meta Ads Library | ✅ Implemented | Official Ad Library API (`ads_archive`), needs `META_ACCESS_TOKEN`. This is the **validation** layer — see below. |
+| TikTok | ⏸️ Paused, stub only | No public API; the only option is reverse-engineering TikTok Creative Center's undocumented internal endpoints, which can't be verified without live access to the site. Decided this wasn't worth the risk of shipping code that silently doesn't work — effort went into Meta Ads Library instead, which is the stronger buy-signal anyway. The stub and integration notes are still in `app/sources/tiktok.py` if you want to pick it up later with real browser devtools access. |
 | Amazon Movers & Shakers | 🔗 Manual link only | No public API; scraping amazon.com violates its ToS, so this is intentionally not automated. |
+
+### Why Meta Ads Library is the priority, not just another source
+
+For dropshipping specifically, "someone is running paid ads for this right
+now" is a stronger signal than search interest or discussion volume —
+it means a real advertiser is spending real money on it, today. So Meta
+Ads Library isn't just a fourth data point: it's the **validation** step
+after Google Trends' **discovery** step. Concretely, for every term it
+covers, Meta Ads Library reports:
+
+- `competition_estimate`: how many active ads are currently running for
+  the term (a real number, not a proxy).
+- `top_advertisers`: the actual Page names running those ads, ranked by
+  how many ads they have active, each linked to one of their real ads via
+  `ad_snapshot_url` — so instead of a bare count you get "here's who's
+  doing it, go look at what they're selling and how."
 
 ### How multiple sources combine on the same term
 
@@ -39,12 +52,12 @@ silently dropped just because multiple sources agree on a term. The
 90-day chart, growth/momentum numbers, and ad-inspection link still come
 from a single "primary" source per term, ranked by `PRIMARY_SOURCE_PRIORITY`
 (Google Trends first, since its series has real daily granularity). The
-**Competition** column is the one exception: since Meta Ads is currently
-the only source that ever fills it with real data, that field specifically
-comes from Meta Ads whenever it reported the term, regardless of which
-source won the primary slot for everything else. The **Sources** column
-on the results page and in the CSV export always lists every source that
-contributed to that row's score.
+**Competition** and **Top advertisers** columns are the exception: since
+Meta Ads is currently the only source that ever fills them with real
+data, those fields specifically come from Meta Ads whenever it reported
+the term, regardless of which source won the primary slot for everything
+else. The **Sources** column on the results page and in the CSV export
+always lists every source that contributed to that row's score.
 
 ## Honest limitations of Google Trends / pytrends
 
@@ -151,13 +164,18 @@ week-over-week score delta per term next to the current results, and
 lists all past runs for that niche so you can track how a niche is
 trending over time.
 
+The schema has grown as sources were added (`sources`,
+`top_advertisers_json`). `init_db()` adds any missing columns to an
+existing `data/dashboard.db` automatically on startup — you don't need to
+delete it between updates.
+
 ## Exporting
 
 Every results page has an **Export CSV** button
 (`/export/{run_id}.csv`) with the full prioritized term list: score,
 contributing sources, growth %, momentum %, average interest, competition
-estimate (from Meta Ads Library when configured, `N/A` otherwise), and the
-ad-inspection link.
+estimate, top advertisers (page names + ad counts, from Meta Ads Library
+when configured, blank otherwise), and the ad-inspection link.
 
 ## Project layout
 
@@ -181,9 +199,13 @@ app/
 tests/
   test_scoring.py        Unit tests for the scoring formulas
   test_reddit.py           Reddit source unit tests (token caching, bucketing)
-  test_meta_ads.py           Meta Ads source unit tests (pagination, bucketing)
-  test_pipeline.py             Full pipeline test through the real FastAPI app,
-                                including the multi-source score-merge behavior
+  test_meta_ads.py           Meta Ads source unit tests (pagination, bucketing,
+                              top-advertisers aggregation)
+  test_db_migration.py         Regression test for the term_signals column
+                                migrations (old DB -> new schema, in place)
+  test_pipeline.py                Full pipeline test through the real FastAPI
+                                   app, including the multi-source score-merge
+                                   behavior
 ```
 
 ## Running the tests

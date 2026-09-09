@@ -13,10 +13,14 @@ bucket the matching ads' ad_delivery_start_time into a 90-day daily count
 (more ads *starting* to run for a term recently is a stronger "this
 converts" signal than a flat, old count), and score it with the same
 growth/momentum formula as the other sources. The raw active-ad count also
-becomes `competition_estimate` — this is the one source that fills that
-field in; see the override in `app.main.run_search` that keeps a term's
-Meta Ads competition numbers even when another source wins the "primary
-display" slot for that term.
+becomes `competition_estimate`, and the ads are grouped by `page_name`
+into `top_advertisers` (page name, how many active ads, and a direct link
+to one of their ads via `ad_snapshot_url`) — this is the whole point of
+this source for dropshipping research: not just "N ads exist" but "here's
+who's actually running them, go look." This is the one source that fills
+in competition_estimate/top_advertisers; see the override in
+`app.main.run_search` that keeps a term's Meta Ads data even when another
+source wins the "primary display" slot for that term.
 
 v1 scope: like Reddit, this only searches the niche term itself, not each
 of Google Trends' individual related terms — ads_archive has no "related
@@ -47,6 +51,7 @@ WINDOW_DAYS = 90
 MAX_RETRIES = 4
 INITIAL_BACKOFF_SECONDS = 2
 MAX_PAGES = 5  # up to 5 * 100 = 500 ads considered per search
+TOP_ADVERTISERS_LIMIT = 5
 
 
 def _with_retry(fn, *args, **kwargs):
@@ -88,7 +93,7 @@ class MetaAdsSource(SignalSource):
             "search_terms": term,
             "ad_active_status": "ACTIVE",
             "ad_reached_countries": settings.meta_ad_reached_countries,
-            "fields": "id,ad_delivery_start_time",
+            "fields": "id,page_name,ad_delivery_start_time,ad_snapshot_url",
             "limit": 100,
         }
 
@@ -137,6 +142,22 @@ class MetaAdsSource(SignalSource):
             series.append({"date": day, "value": round(value, 1)})
         return series
 
+    def _top_advertisers(self, ads: list[dict], limit: int = TOP_ADVERTISERS_LIMIT) -> list[dict]:
+        by_page: dict[str, dict] = {}
+        for ad in ads:
+            page_name = ad.get("page_name")
+            if not page_name:
+                continue
+            entry = by_page.setdefault(
+                page_name, {"page_name": page_name, "ad_count": 0, "sample_ad_url": None}
+            )
+            entry["ad_count"] += 1
+            if entry["sample_ad_url"] is None and ad.get("ad_snapshot_url"):
+                entry["sample_ad_url"] = ad["ad_snapshot_url"]
+
+        ranked = sorted(by_page.values(), key=lambda e: e["ad_count"], reverse=True)
+        return ranked[:limit]
+
     def fetch_signals(self, niche: str, max_terms: int) -> list[TermSignal]:
         ads = self._search_ads(niche)
         series = self._daily_series(ads)
@@ -158,5 +179,6 @@ class MetaAdsSource(SignalSource):
                 competition_label=f"{count_label} active ads matching this term (Meta Ad Library)",
                 ad_library_url=ads_library_url(niche),
                 series=series,
+                top_advertisers=self._top_advertisers(ads),
             )
         ]

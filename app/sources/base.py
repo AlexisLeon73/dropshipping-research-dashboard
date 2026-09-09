@@ -38,6 +38,9 @@ class TermSignal:
     competition_label: str | None = None
     ad_library_url: str | None = None
     series: list[dict] = field(default_factory=list)  # [{"date": "...", "value": 0}]
+    # [{"page_name": ..., "ad_count": N, "sample_ad_url": "..."}, ...],
+    # ranked by ad_count desc. Only ever populated by Meta Ads Library today.
+    top_advertisers: list[dict] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {
@@ -51,6 +54,7 @@ class TermSignal:
             "competition_label": self.competition_label,
             "ad_library_url": self.ad_library_url,
             "series": self.series,
+            "top_advertisers": self.top_advertisers,
         }
 
 

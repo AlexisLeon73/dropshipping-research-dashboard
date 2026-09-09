@@ -1,8 +1,9 @@
 """Meta Ads Library source tests. The Graph API call is mocked — this
 sandbox has no general internet egress. What's verified for real: the
 daily-bucketing math (ad_delivery_start_time -> 90-day series), pagination
-via the "next" URL, and that the active-ad count becomes
-competition_estimate.
+via the "next" URL, that the active-ad count becomes competition_estimate,
+and that ads are grouped by page_name into a ranked top_advertisers list
+with a direct link to a sample ad per advertiser.
 """
 import datetime
 
@@ -83,14 +84,45 @@ def test_search_ads_paginates_via_next_url(monkeypatch):
     assert calls[1] == "https://graph.facebook.com/next-page"
 
 
-def test_fetch_signals_sets_competition_estimate_from_ad_count(monkeypatch):
+def test_top_advertisers_groups_by_page_and_ranks_by_ad_count():
+    source = MetaAdsSource()
+    ads = (
+        [{"page_name": "PageA", "ad_snapshot_url": "https://fb.com/a1"}] * 5
+        + [{"page_name": "PageB", "ad_snapshot_url": "https://fb.com/b1"}] * 2
+        + [{"page_name": "PageA", "ad_snapshot_url": "https://fb.com/a2"}]  # 2nd PageA ad
+        + [{"ad_snapshot_url": "https://fb.com/no-page"}]  # missing page_name, skipped
+    )
+
+    top = source._top_advertisers(ads)
+
+    assert [a["page_name"] for a in top] == ["PageA", "PageB"]
+    assert top[0]["ad_count"] == 6
+    assert top[0]["sample_ad_url"] == "https://fb.com/a1"  # first one seen
+    assert top[1]["ad_count"] == 2
+
+
+def test_top_advertisers_respects_limit():
+    source = MetaAdsSource()
+    ads = [{"page_name": f"Page{i}", "ad_snapshot_url": f"https://fb.com/{i}"} for i in range(10)]
+
+    top = source._top_advertisers(ads, limit=3)
+
+    assert len(top) == 3
+
+
+def test_fetch_signals_sets_competition_estimate_and_top_advertisers(monkeypatch):
     import app.sources.meta_ads as meta_ads_module
 
     monkeypatch.setattr(meta_ads_module.settings, "meta_access_token", "tok")
     now = datetime.datetime.now(datetime.timezone.utc)
     ads_payload = {
         "data": [
-            {"id": str(i), "ad_delivery_start_time": (now - datetime.timedelta(days=2)).isoformat()}
+            {
+                "id": str(i),
+                "page_name": "WinnerPage" if i < 5 else "OtherPage",
+                "ad_snapshot_url": f"https://fb.com/ad{i}",
+                "ad_delivery_start_time": (now - datetime.timedelta(days=2)).isoformat(),
+            }
             for i in range(7)
         ],
         "paging": {},
@@ -108,3 +140,6 @@ def test_fetch_signals_sets_competition_estimate_from_ad_count(monkeypatch):
     assert signal.source == "meta_ads"
     assert signal.competition_estimate == 7
     assert "7 active ads" in signal.competition_label
+    assert signal.top_advertisers[0]["page_name"] == "WinnerPage"
+    assert signal.top_advertisers[0]["ad_count"] == 5
+    assert signal.top_advertisers[0]["sample_ad_url"] == "https://fb.com/ad0"

@@ -54,9 +54,10 @@ def run_search(niche: str, max_terms: int) -> list[dict]:
     from one source (the 90-day series, growth/momentum, the
     ad-inspection link) come from whichever configured source ranks
     highest in PRIMARY_SOURCE_PRIORITY — except competition_estimate /
-    competition_label, which currently only Meta Ads ever fills in with
-    real data, so those two fields specifically come from Meta Ads
-    whenever it reported the term, regardless of who "wins" otherwise.
+    competition_label / top_advertisers, which currently only Meta Ads
+    ever fills in with real data, so those fields specifically come from
+    Meta Ads whenever it reported the term, regardless of who "wins"
+    otherwise.
     """
     per_term_scores: dict[str, dict[str, float]] = {}
     per_term_signals: dict[str, dict[str, dict]] = {}
@@ -88,12 +89,14 @@ def run_search(niche: str, max_terms: int) -> list[dict]:
         data["score"] = combine_source_scores(per_term_scores[term])
         data["sources"] = sorted(sources_data.keys())
 
-        # Competition data is currently only ever supplied by Meta Ads
-        # Library — use it even when another source won the primary slot.
+        # Competition data and top advertisers are currently only ever
+        # supplied by Meta Ads Library — use them even when another
+        # source won the primary slot.
         meta_ads_data = sources_data.get("meta_ads")
         if meta_ads_data and meta_ads_data.get("competition_estimate") is not None:
             data["competition_estimate"] = meta_ads_data["competition_estimate"]
             data["competition_label"] = meta_ads_data["competition_label"]
+            data["top_advertisers"] = meta_ads_data.get("top_advertisers", [])
 
         final_signals.append(data)
 
@@ -143,7 +146,9 @@ def results(request: Request, run_id: int):
         delta = None
         if row["term"] in previous_scores:
             delta = round(row["score"] - previous_scores[row["term"]], 1)
-        rows.append({**dict(row), "score_delta": delta})
+        row_dict = dict(row)
+        row_dict["top_advertisers"] = json.loads(row_dict.pop("top_advertisers_json") or "[]")
+        rows.append({**row_dict, "score_delta": delta})
         chart_series[row["term"]] = json.loads(row["series_json"])
 
     other_runs = [r for r in db.get_runs_for_niche(run["niche"]) if r["id"] != run_id]

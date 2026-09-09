@@ -52,6 +52,7 @@
                 <th>Momentum %</th>
                 <th>Avg interest</th>
                 <th>Competition</th>
+                <th>Top advertisers</th>
                 <th>Ads Library</th>
             </tr>
         </thead>
@@ -74,6 +75,14 @@
                 <td>{{ row['avg_interest'] }}</td>
                 <td class="muted" title="{{ row['competition_label'] }}">
                     {{ row['competition_estimate'] if row['competition_estimate'] is not none else 'N/A' }}
+                </td>
+                <td>
+                    {% if row['top_advertisers'] %}
+                        {% for adv in row['top_advertisers'][:3] %}
+                            {% if adv['sample_ad_url'] %}<a href="{{ adv['sample_ad_url'] }}" target="_blank" rel="noopener" title="{{ adv['ad_count'] }} active ads">{{ adv['page_name'] }}</a>
+                            {% else %}<span title="{{ adv['ad_count'] }} active ads">{{ adv['page_name'] }}</span>{% endif %}{% if not loop.last %}, {% endif %}
+                        {% endfor %}
+                    {% else %}<span class="muted">—</span>{% endif %}
                 </td>
                 <td><a href="{{ row['ad_library_url'] }}" target="_blank" rel="noopener">inspect ads ↗</a></td>
             </tr>
